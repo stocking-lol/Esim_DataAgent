@@ -2,6 +2,27 @@
 
 本文档记录 eSIM NL2SQL Platform 的版本演进，遵循 [Keep a Changelog](https://keepachangelog.com/) 约定，版本号采用语义化版本 (SemVer)。
 
+## [0.7.0] - 2026-08-06
+
+### 新增 (Added)
+- **演示用例集** — `scripts/eval/demo_set.json`（18 个场景），覆盖基础 NL2SQL（7 类）、安全防护、RLS 租户隔离、数据脱敏、自我纠错、可视化；gold SQL 严格对照真实 eSIM schema。
+- **演示运行器** — `scripts/demo.py`：支持离线静态展示（零 API 调用，并对基础查询对比「规则基线」与 Vanna 差异）与 `--live` 实时连线演示（POST `/api/v1/query`），可按 `--feature` 过滤。
+- **演示集校验测试** — `tests/test_demo_set.py`（7 项）：校验演示集结构完整、gold SQL 可被 MySQL 方言解析、`category`/`feature` 合法、覆盖核心能力。
+- **前端示例问题入口** — `frontend/app.js` 新增 `DEMO_QUESTIONS`，首页「示例问题」快捷入口由演示用例集动态填充（单一数据源）。
+- **非 Vanna 的纯规则 NL2SQL 基线** — `app/core/nl2sql_baseline.py`（12 项单测）与 `scripts/eval/compare_eval.py`，用同一套评估集量化 Vanna 相对朴素方案的优越性（选型支撑）。
+
+### 修复 (Fixed)
+- **安全网关 fail-closed 加固** — `app/core/sql_security.py`：解析/校验失败（`ParseError`/`TokenError`）由原先的 fail-open（放行）改为 fail-closed（默认拦截），并增加基于正则的兜底校验（FROM/JOIN 表提取 + 白名单 + 危险函数 + `@@` 系统变量）；`vanna_instance.py` 安全校验异常同样 fail-closed。新增 `tests/test_security.py::TestFailClosed`（5 项）。
+
+### 变更 (Changed)
+- 测试套件从 **167 项**扩展至 **191 项**（新增 baseline 12 + demo 7 + fail-closed 5），全部通过；安全攻防用例从 40 增加到 45。
+- README 新增「演示用例（快速体验）」章节与「技术选型：为什么用 Vanna」章节，并以可验证指标替换主观自夸表述。
+
+### 安全 (Security)
+- 安全网关对解析/校验失败采取 **fail-closed（默认拦截）** 策略，新增 5 项 fail-closed 攻防用例固化该行为。
+
+---
+
 ## [0.6.0] - 2026-08-06
 
 ### 新增 (Added)
@@ -56,3 +77,4 @@
 ## 版本说明
 - `0.5.0`：基础平台 + 第一、二周功能（Day 1-15）。
 - `0.6.0`：企业级安全与可观测性（Day 16-22），含 RLS、列级脱敏、自我纠错、可视化、监控告警、查询缓存、评估基准。
+- `0.7.0`：安全网关 fail-closed 加固、非 Vanna 规则基线 + 对比评估（技术选型支撑）、演示用例集与运行器、前端示例入口，测试 167→191。

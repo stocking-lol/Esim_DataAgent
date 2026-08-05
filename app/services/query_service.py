@@ -135,6 +135,16 @@ async def execute_query(
             parts.append(f"请根据以下业务知识和数据库信息回答问题。\n\n{training_context}")
         if conversation_context:
             parts.append(conversation_context)
+
+        # 显式约束：禁止模型查询系统表或执行 SHOW TABLES，避免安全拦截
+        system_note = (
+            "【重要约束】只允许使用上面给出的白名单业务表。"
+            "禁止使用 information_schema、performance_schema、mysql 等系统表；"
+            "禁止执行 SHOW TABLES、DESCRIBE、EXPLAIN 等元数据查询；"
+            "不要编造不存在的表名。"
+        )
+        parts.append(system_note)
+
         if parts:
             parts.append(f"用户问题: {question}")
             augmented_question = "\n\n".join(parts)
@@ -163,6 +173,7 @@ async def execute_query(
                 all_text.append(extracted["content"])
             elif extracted["type"] == "error":
                 result.error = extracted["content"]
+            # "skip" 类型：Vanna 内部 UI 组件，忽略
 
         # 聚合 SQL（优先从 CapturingRunSqlTool 获取）
         captured_sql = vanna_manager.get_last_sql()
@@ -174,9 +185,23 @@ async def execute_query(
                     result.sql = sql.strip()
                     break
 
-        # 聚合摘要文本
-        if all_text:
-            result.summary = "\n".join(all_text[-3:])  # 取最后3条作为摘要
+        # 生成自然语言摘要（使用 LLM，替代原始组件文本拼接）
+        if result.data is not None and result.sql and not result.blocked:
+            try:
+                from app.core.llm import llm_service
+                result.summary = await llm_service.generate_summary(
+                    question=question,
+                    sql=result.sql,
+                    data=result.data,
+                    columns=result.columns,
+                )
+            except Exception as e:
+                logger.warning("Summary generation failed, fallback to raw text: %s", e)
+                if all_text:
+                    result.summary = "\n".join(all_text[-3:])
+        elif all_text:
+            # 无数据时保留组件文本作为状态说明
+            result.summary = "\n".join(all_text[-3:])
 
         elapsed = (time.perf_counter() - start_time) * 1000
         result.execution_time_ms = round(elapsed, 2)
@@ -535,7 +560,7 @@ def _extract_from_component(component: UiComponent) -> dict:
     }
 
     Returns:
-        dict: {"type": "sql"|"data"|"text"|"error", "content": ..., ...}
+        dict: {"type": "sql"|"data"|"text"|"error"|"skip", ...}
     """
     try:
         rich = component.rich_component
@@ -544,6 +569,11 @@ def _extract_from_component(component: UiComponent) -> dict:
         # 调试：记录组件类型
         comp_type = type(rich).__name__ if rich else (type(simple).__name__ if simple else "None")
         logger.debug("Component type: %s", comp_type)
+
+        # 跳过 Vanna Agent 内部 UI 状态组件（避免污染摘要/上下文）
+        skip_types = {"StatusBarUpdate", "ChatInputUpdate", "StatusBar", "ChatInput"}
+        if comp_type in skip_types:
+            return {"type": "skip"}
 
         # --- 处理 rich_component ---
         if rich is not None:

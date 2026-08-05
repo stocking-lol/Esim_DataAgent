@@ -61,9 +61,10 @@ TABLE_METADATA: dict[str, TableMeta] = {
     "orders": TableMeta(
         name="orders",
         chinese_name="订单",
-        description="订单信息表",
+        description="订单信息表。漫游订单指购买的套餐类型为漫游套餐（plans.type='roaming'）的订单，需关联 orders、plans、users 表统计。",
         keywords=["订单", "order", "订购", "购买", "支付", "payment", "金额",
-                  "amount", "状态", "status", "激活", "activate", "取消", "cancel"],
+                  "amount", "状态", "status", "激活", "activate", "取消", "cancel",
+                  "漫游订单", "roaming order", "漫游套餐订单"],
         columns=["id", "user_id", "plan_id", "order_no", "status", "amount",
                  "payment_method", "mvno_id", "created_at", "activated_at"],
         sensitive_columns=[],

@@ -1,10 +1,12 @@
 # eSIM NL2SQL Platform
 
-> 企业级自然语言数据查询平台 — 基于 FastAPI + Vanna 2.0 + ChromaDB + DeepSeek-V3
+> 自然语言数据查询平台（NL2SQL）— 基于 FastAPI + Vanna 2.0 + ChromaDB + DeepSeek-V3
 
 ## 项目简介
 
-eSIM NL2SQL 平台是一个 Level 3 安全工程级的自然语言到 SQL 查询系统，面向 eSIM 运营数据查询场景。用户可以用自然语言提问（如"本月新增多少 eSIM 用户"），平台自动生成 SQL、执行查询、返回结构化结果，并支持多轮对话追问。
+eSIM NL2SQL 平台是一个面向 eSIM 运营数据查询场景的自然语言到 SQL（NL2SQL）查询系统。用户可用自然语言提问（如"本月新增多少 eSIM 用户"），平台自动生成 SQL、执行查询、返回结构化结果，并支持多轮对话追问。
+
+系统的安全能力以**可验证**的方式落地，而非口号：内置四层 SQL 安全网关、行级租户隔离（RLS）与自我纠错回路，并通过 **191 项自动化测试**（其中 **45 个 SQL 注入 / Prompt 注入 / fail-closed 攻防用例**）持续验证；安全网关对解析/校验失败采取 **fail-closed（默认拦截）** 策略。详见下方「安全设计」「演示用例」「技术选型」与「质量指标」章节。
 
 ### 核心能力
 
@@ -57,10 +59,13 @@ python scripts/create_conversation_tables.py
 # 5. 启动应用
 python -m uvicorn app.main:app --reload
 
-# 6. 访问
-# API 文档: http://localhost:8000/docs
-# 健康检查: http://localhost:8000/health
+# 6. 访问（后端同源托管前端，无需单独起静态服务器 / 无需 CORS）
+# 前端界面: http://localhost:8000/            <-- 直接打开即用
+# API 文档:  http://localhost:8000/docs
+# 健康检查:  http://localhost:8000/health
+# 监控指标:  http://localhost:8000/metrics    （需 ENABLE_METRICS=true）
 ```
+
 
 ### 方式二：Docker 运行
 
@@ -215,7 +220,7 @@ esim-nl2sql-platform/
 
 ## 高级特性
 
-平台在基础 NL2SQL 之上，内置了企业级安全与可观测能力：
+平台在基础 NL2SQL 之上，内置了安全与可观测能力（均以测试/评估量化，非口号）：
 
 - **行级安全 RLS（Day 16）**：通过 `sqlglot` AST 注入租户过滤条件，实现 MVNO 多租户数据隔离；运行时由 `CapturingRunSqlTool.set_user_context(role, mvno_id)` 注入上下文，查询结束后自动重置。
 - **列级权限与脱敏（Day 17）**：角色级列白名单（admin/analyst/viewer），viewer 对 `users`/`orders` 仅可见授权列；敏感字段（手机号 `138****5678`、邮箱 `z***@xxx`、ICCID）自动脱敏。
@@ -224,6 +229,65 @@ esim-nl2sql-platform/
 - **监控告警（Day 20）**：`metrics` 中间件暴露 QPS、P95 延迟、安全拦截率、纠错率、查询准确率等业务指标（Prometheus `/metrics`）；配套 Prometheus 告警规则与 Grafana 仪表盘。
 - **查询缓存（Day 21）**：按 `(question, role, mvno_id)` 的 TTL 内存缓存，规避大模型重复生成开销。
 - **评估基准（Day 22）**：`scripts/eval/` 提供 54 题测试集（7 类 × 3 难度）与静态/在线两种评估模式，输出 Execution Accuracy + Exact Match 报告。
+
+## 演示用例（快速体验）
+
+平台内置一份精心挑选的**演示用例集** [`scripts/eval/demo_set.json`](scripts/eval/demo_set.json)（18 个场景），覆盖平台全部核心能力，gold SQL 严格对照真实 eSIM schema：
+
+- **基础 NL2SQL（7 类）**：单表 / 多表关联 / 聚合计数 / 时间过滤 / 排名 Top-N / 分组统计 / 对比分析
+- **安全防护**：SQL 注入、Prompt 注入、UNION 注入 —— 均被四层安全网关以 `code=1001` 拦截（fail-closed）
+- **行级租户隔离 RLS**：同一问句，admin 看全量、viewer 仅见本 MVNO 租户数据
+- **数据脱敏**：手机号 `138****5678`、邮箱 `z***@xxx`、ICCID 按角色自动脱敏
+- **自我纠错回路**：生成 SQL 引用不存在列时，错误分类器判定可重试 → LLM 纠错 → 自动重试成功
+- **可视化**：自动推荐并生成 Plotly 图表（bar/line/pie/table）
+
+两种体验方式：
+
+```bash
+# 1) 离线静态展示（零 API 调用；基础查询类会同时调用规则基线引擎，对比 Vanna 的差异）
+python scripts/demo.py
+
+# 2) 连线实时演示（需先启动后端：python -m uvicorn app.main:app --reload）
+python scripts/demo.py --live --endpoint http://localhost:8000
+
+# 只看安全攻防 / RLS / 脱敏 等某一类：
+python scripts/demo.py --feature security
+```
+
+演示集本身由 [`tests/test_demo_set.py`](tests/test_demo_set.py) 校验：结构完整、gold SQL 可被 MySQL 方言解析、`category`/`feature` 取值合法、覆盖核心能力。前端首页也内置了与演示用例集对齐的「示例问题」快捷入口，点击即可直接提问。
+
+## 质量指标（可验证）
+
+本项目的每一条安全/质量主张都以自动化测试或可量化评估支撑，而非形容词：
+
+| 维度 | 数值 / 说明 |
+|------|------|
+| 自动化测试 | **191 项**（pytest），其中 **45 个 SQL 注入 / Prompt 注入 / fail-closed 攻防用例**（绝大多数 AI 项目接近于零测试） |
+| 安全网关策略 | **fail-closed**：SQL 解析/校验失败时默认**拦截**而非放行（见 `test_security.py::TestFailClosed`） |
+| 评估基准 | **54 题**（7 类 × 3 难度）黄金 SQL 测试集，输出 Execution Accuracy + Exact Match |
+| 执行准确率（EA，前 20 题对齐） | 规则基线 **65%** · Vanna **95%** |
+| 自我纠错 | 9 类 SQL 错误分类 + 自动重试回路（26 项单测覆盖） |
+
+## 技术选型：为什么用 Vanna（而非纯规则 / 从零手写）
+
+为了回答「不用 Vanna 你怎么从零实现 NL2SQL」，本项目**同时交付了一个不依赖 LLM 的纯规则基线** `app/core/nl2sql_baseline.py`（12 项单测覆盖 7 类意图），并设计了 `scripts/eval/compare_eval.py` 用**同一套 54 题评估集**量化二者的差距，作为选型依据。
+
+**同一 20 题子集（对齐）的对比：**
+
+| 指标 | 纯规则基线（无 LLM） | Vanna（LLM Agent） |
+|------|------|------|
+| 执行准确率 EA | 65% | **95%** |
+| 精确匹配 EM | 0% | 0% |
+| `join` 类 EA | 20% | **100%** |
+| `aggregation` 类 EA | 86% | 100% |
+| 自我纠错能力 | 无（模板错则永久错） | 有（错误分类→LLM 纠错→自动重试） |
+| 推理成本 | 0 | 每次查询若干 LLM 调用 |
+
+**从零实现 NL2SQL 的基本路径**（基线即此）：schema 元数据 → 意图识别（关键词/句法）→ 模板拼装 → 执行校验。它的天花板就是上表的 65% EA，且对未写进模板的句式直接退化（例如「利润最高的运营商」「激活失败的用户」只能退化成 `SELECT *` 或漏掉语义过滤）。这正是 LLM 方案的差距所在。
+
+**Vanna 的增量价值**：把"理解自然语言"这一步交给模型，配合 RAG（ChromaDB 检索业务 DDL / 文档 / SQL 示例）与自我纠错回路，在 `join`、歧义列、复杂/口语化问句上显著更优（join 类 EA 从 20% → 100%）。本样本 20 题中 Vanna 首轮即正确、无需强制重试；自我纠错回路由 26 项专测（错误分类 9 类 + 重试循环）独立验证。
+
+> 说明：EM（与黄金 SQL 字符串完全一致）对 LLM 天然偏低（别名/列顺序差异即判错），故本项目以 **EA（触及正确表集合且可执行）** 作为主口径，与 `run_eval.py` 一致。
 
 ## 测试
 
@@ -287,12 +351,13 @@ python -m pytest tests/test_query.py::test_conversation_crud -v
 | Day 20 | 监控告警（Prometheus + Grafana + 告警规则） | 完成 |
 | Day 21 | 第三周收尾：全链路集成测试 + 查询缓存 | 完成 |
 | Day 22 | 评估基准（54 题测试集 + 评估脚本） | 完成 |
+| Day 23 | 前端 Web UI（同源托管 SPA）、安全网关 fail-closed 加固、非 Vanna 规则基线 NL2SQL + Vanna 对比评估、README 质量指标/技术选型章节 | 完成 |
 
 ### 待实现
 
 | 阶段 | 内容 |
 |------|------|
-| Day 23+ | 前端 Web UI、Docker 完整部署、开源发布准备 |
+| Day 24+ | Docker 完整部署打磨、GitHub 开源发布准备、CI/CD |
 
 ## License
 

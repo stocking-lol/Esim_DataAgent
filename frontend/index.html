@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>eSIM NL2SQL 智能数据平台</title>
+  <link rel="preconnect" href="https://cdn.plot.ly" />
+  <link rel="stylesheet" href="/frontend/styles.css" />
+</head>
+<body>
+  <!-- 登录遮罩 -->
+  <div id="login-overlay" class="overlay">
+    <div class="login-card">
+      <div class="brand">
+        <div class="brand-logo">eSIM</div>
+        <h1>NL2SQL 智能数据平台</h1>
+        <p class="subtitle">用自然语言查询你的 eSIM 业务数据库</p>
+      </div>
+      <form id="login-form">
+        <label>用户名
+          <input id="login-username" type="text" placeholder="admin" autocomplete="username" />
+        </label>
+        <label>密码
+          <input id="login-password" type="password" placeholder="••••••••" autocomplete="current-password" />
+        </label>
+        <button type="submit" id="login-btn">登录</button>
+        <div id="login-error" class="error-box" hidden></div>
+        <div class="hint">演示账号：admin / esim_admin_2026 · analyst / esim_analyst_2026</div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 主应用 -->
+  <div id="app" class="app" hidden>
+    <!-- 侧边栏 -->
+    <aside class="sidebar">
+      <div class="sidebar-head">
+        <span class="logo-small">eSIM</span>
+        <span class="logo-text">NL2SQL</span>
+      </div>
+      <button id="new-chat-btn" class="btn-primary block">+ 新建对话</button>
+      <div class="nav-label">对话历史</div>
+      <ul id="conv-list" class="conv-list"></ul>
+      <div class="sidebar-foot">
+        <button id="admin-btn" class="btn-ghost block" hidden>⚙ 管理面板</button>
+        <button id="settings-btn" class="btn-ghost block">⚙ 设置</button>
+        <div id="user-box" class="user-box"></div>
+        <button id="logout-btn" class="btn-ghost block">退出登录</button>
+      </div>
+    </aside>
+
+    <!-- 主区域 -->
+    <main class="main">
+      <header class="topbar">
+        <div class="topbar-title" id="chat-title">开始提问吧</div>
+        <div class="topbar-meta" id="chat-meta"></div>
+      </header>
+
+      <section id="messages" class="messages">
+        <div class="empty-state">
+          <h2>👋 欢迎使用 eSIM NL2SQL 平台</h2>
+          <p>直接输入业务问题，例如：</p>
+        <div class="suggest"><!-- 由 frontend/app.js 的 DEMO_QUESTIONS 动态填充 --></div>
+          <p class="foot">查询由 AI 生成 SQL 并在安全网关（RLS + 列级脱敏）保护下执行。</p>
+        </div>
+      </section>
+
+      <footer class="composer">
+        <textarea id="question-input" rows="1" placeholder="输入你的数据问题，Enter 发送，Shift+Enter 换行"></textarea>
+        <button id="send-btn" class="btn-primary">发送</button>
+      </footer>
+    </main>
+  </div>
+
+  <!-- 管理面板 -->
+  <div id="admin-overlay" class="overlay" hidden>
+    <div class="modal wide">
+      <div class="modal-head">
+        <h2>管理面板</h2>
+        <button class="close-btn" data-close="admin-overlay">✕</button>
+      </div>
+      <div class="tabs">
+        <button class="tab active" data-tab="stats">训练统计</button>
+        <button class="tab" data-tab="audit">审计日志</button>
+        <button class="tab" data-tab="security">安全状态</button>
+        <button class="tab" data-tab="users">用户管理</button>
+      </div>
+      <div id="tab-stats" class="tab-panel active"></div>
+      <div id="tab-audit" class="tab-panel"></div>
+      <div id="tab-security" class="tab-panel"></div>
+      <div id="tab-users" class="tab-panel"></div>
+    </div>
+  </div>
+
+  <!-- 设置 -->
+  <div id="settings-overlay" class="overlay" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <h2>设置</h2>
+        <button class="close-btn" data-close="settings-overlay">✕</button>
+      </div>
+      <label>后端 API 地址
+        <input id="api-base-input" type="text" placeholder="http://localhost:8000" />
+      </label>
+      <label>主题
+        <select id="theme-select">
+          <option value="light">浅色</option>
+          <option value="dark">深色</option>
+        </select>
+      </label>
+      <div class="modal-actions">
+        <button id="save-settings-btn" class="btn-primary">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+  <script src="/frontend/app.js"></script>
+</body>
+</html>

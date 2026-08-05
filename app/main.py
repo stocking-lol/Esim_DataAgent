@@ -16,6 +16,8 @@ if str(_project_root) not in sys.path:
 from fastapi import FastAPI
 from fastapi.exceptions import HTTPException, RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import ValidationError
 
@@ -184,6 +186,26 @@ app.add_exception_handler(Exception, general_exception_handler)
 
 # --- 注册 API 路由 ---
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)
+
+
+# --- 托管前端静态页面（同源访问，彻底规避 CORS）---
+# 前端为纯静态 SPA（无构建步骤），由后端直接托管：
+#   GET /            -> frontend/index.html
+#   GET /frontend/*  -> 静态资源（css/js）
+# 这样界面与 /api/v1 同源，浏览器不再拦截跨域请求。
+_FRONTEND_DIR = _project_root / "frontend"
+if _FRONTEND_DIR.is_dir():
+
+    @app.get("/", include_in_schema=False)
+    async def serve_index():
+        """根路径返回前端单页应用。"""
+        return FileResponse(_FRONTEND_DIR / "index.html")
+
+    app.mount(
+        "/frontend",
+        StaticFiles(directory=str(_FRONTEND_DIR), html=True),
+        name="frontend",
+    )
 
 
 # ============================================================

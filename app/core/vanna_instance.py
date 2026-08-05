@@ -125,8 +125,19 @@ class CapturingRunSqlTool(RunSqlTool):
                 self._last_sql = check_result.sql_after_check
 
         except Exception as e:
-            # 安全校验本身出错不阻塞执行，但记录警告
-            logger.warning("SQL security check error (allowing execution): %s", e)
+            # 安全校验子系统自身故障：FAIL-CLOSED —— 宁可阻断，不可在未经验证下执行 SQL
+            logger.error("SQL security check FAILED (fail-closed, blocking): %s", e)
+            self._last_blocked = True
+            self._last_block_reason = f"安全校验子系统异常，默认拦截: {e}"
+            return ToolResult(
+                success=False,
+                result_for_llm=(
+                    "SQL 安全校验子系统暂时不可用，出于安全优先原则已阻断本次执行。"
+                    "请稍后重试。"
+                ),
+                error=self._last_block_reason,
+                metadata={"blocked": True, "layer": "security_subsystem", "reason": self._last_block_reason},
+            )
 
         # --- RLS 行级安全条件注入 ---
         try:

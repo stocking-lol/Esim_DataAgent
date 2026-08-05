@@ -387,3 +387,50 @@ class TestSecuritySummary:
             assert not result.passed, f"Failed to block: {payload}"
             assert result.layer == expected_layer, \
                 f"Wrong layer for '{payload}': expected {expected_layer}, got {result.layer}"
+
+
+# ============================================================
+# Day 23: FAIL-CLOSED 安全网测试
+# ============================================================
+
+class TestFailClosed:
+    """安全网关必须 FAIL-CLOSED：解析/校验失败时默认拦截，而非放行。
+
+    反模式（已修复）：sqlglot 解析失败 → 直接 passed=True，绕过白名单表校验，
+    攻击者可构造 sqlglot 解析不了但 MySQL 能执行的 SQL 越权访问系统表。
+    """
+
+    def test_parse_failure_whitelisted_table_allowed(self):
+        """解析失败但仅触及白名单表 → 兜底放行（正则第二道校验通过）"""
+        # 括号不匹配导致 sqlglot 解析失败，但只引用白名单表 users
+        sql = "SELECT * FROM (SELECT id FROM users"
+        result = sql_gateway.validate_sql(sql)
+        assert result.passed is True
+
+    def test_parse_failure_nonwhitelist_table_blocked(self):
+        """解析失败且引用非白名单表（information_schema）→ 必须拦截（fail-closed）"""
+        sql = "SELECT * FROM (SELECT id FROM information_schema.tables"
+        result = sql_gateway.validate_sql(sql)
+        assert result.passed is False
+        assert result.layer == "schema_limiter"
+        assert "information_schema" in result.reason
+
+    def test_token_error_nonwhitelist_table_blocked(self):
+        """未闭合引号（TokenError）且引用非白名单表 → 必须拦截（fail-closed）"""
+        sql = "SELECT * FROM secret_table WHERE x = 'unclosed"
+        result = sql_gateway.validate_sql(sql)
+        assert result.passed is False
+        assert "secret_table" in result.reason
+
+    def test_parse_failure_dangerous_func_blocked(self):
+        """解析失败但含危险函数 SLEEP → 正则兜底仍拦截"""
+        sql = "SELECT SLEEP(5) FROM (SELECT 1"
+        result = sql_gateway.validate_sql(sql)
+        assert result.passed is False
+
+    def test_regex_fallback_blocks_system_variable(self):
+        """解析失败时仍禁止系统变量 @@"""
+        sql = "SELECT @@version FROM (SELECT 1"
+        result = sql_gateway.validate_sql(sql)
+        assert result.passed is False
+        assert "@@" in result.reason

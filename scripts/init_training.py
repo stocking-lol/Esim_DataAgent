@@ -398,6 +398,14 @@ SQL_EXAMPLES = [
         "question": "漫游包销量统计",
         "sql": "SELECT rp.name, rp.countries, rp.price, COUNT(o.id) AS purchase_count FROM roaming_packages rp LEFT JOIN orders o ON rp.id = o.plan_id AND o.status IN ('paid','activated') WHERE rp.status = 'active' GROUP BY rp.id, rp.name, rp.countries, rp.price ORDER BY purchase_count DESC",
     },
+    {
+        "question": "各地区漫游订单数",
+        "sql": "SELECT u.region, COUNT(o.id) AS roaming_order_count FROM orders o JOIN plans p ON o.plan_id = p.id JOIN users u ON o.user_id = u.id WHERE p.type = 'roaming' AND o.status IN ('paid','activated') GROUP BY u.region ORDER BY roaming_order_count DESC",
+    },
+    {
+        "question": "上周各地区的漫游订单数",
+        "sql": "SELECT u.region, COUNT(o.id) AS roaming_order_count FROM orders o JOIN plans p ON o.plan_id = p.id JOIN users u ON o.user_id = u.id WHERE p.type = 'roaming' AND o.status IN ('paid','activated') AND o.created_at >= DATE_SUB(CURRENT_DATE, INTERVAL 7 DAY) GROUP BY u.region ORDER BY roaming_order_count DESC",
+    },
 ]
 
 

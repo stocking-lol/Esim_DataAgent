@@ -17,7 +17,7 @@ from typing import Optional
 
 import yaml
 from sqlglot import exp, parse_one
-from sqlglot.errors import ParseError
+from sqlglot.errors import ParseError, TokenError
 
 logger = logging.getLogger(__name__)
 
@@ -260,10 +260,16 @@ class SQLSecurityGateway:
 
         try:
             parsed = parse_one(sql, dialect="mysql")
-        except ParseError as e:
-            logger.warning("SQL parse failed: %s", e)
-            # 解析失败不直接拦截，可能是非标准语法，让 DB 自己报错
-            return SecurityCheckResult(passed=True, sql_after_check=sql)
+        except (ParseError, TokenError) as e:
+            logger.warning("SQL parse failed (sqlglot): %s", e)
+            # ── FAIL-CLOSED 安全网 ──
+            # 解析失败时无法做 AST 级校验，但绝不能因此放行——否则攻击者
+            # 只需构造一条 sqlglot 解析不了、但 MySQL 能执行的 SQL，即可
+            # 绕过白名单表校验（如访问 information_schema）。
+            # 这里启动"正则兜底校验"：独立第二道校验器，仍然强制：
+            #   1) 仅允许白名单表  2) 禁止危险关键词  3) 禁止危险函数/系统变量
+            # 若正则兜底也无法确认（发现非白名单表或危险构造）→ 直接拦截。
+            return self._regex_fallback_validate(sql)
 
         # 收集 CTE 别名（WITH ... AS 中的别名不是真实表，不应受白名单限制）
         cte_names: set[str] = set()
@@ -352,6 +358,74 @@ class SQLSecurityGateway:
             passed=True,
             sql_after_check=sql_after,
         )
+
+    # ============================================================
+    # 正则兜底校验（解析失败时的 FAIL-CLOSED 安全网）
+    # ============================================================
+
+    @staticmethod
+    def _extract_tables_regex(sql_lower: str) -> set[str]:
+        """用正则提取 SQL 中的表名（仅显式 FROM/JOIN 之后）
+
+        用于 sqlglot 解析失败时的兜底白名单校验。只在「FROM <表>」「JOIN <表>」
+        处提取，避免把列名/关键字误判为表（已下线宽松子句扫描，杜绝误杀合法查询）。
+        """
+        tables: set[str] = set()
+        for m in re.finditer(r'\b(?:from|join)\s+`?([a-zA-Z_][\w]*)`?', sql_lower):
+            tables.add(m.group(1).lower())
+        return tables
+
+    def _regex_fallback_validate(self, sql: str) -> SecurityCheckResult:
+        """解析失败时的兜底校验：FAIL-CLOSED
+
+        原则：无法用 AST 验证时，**默认拦截**，但允许一条"仅触及白名单表且
+        不含危险构造"的 SQL 通过（正则第二道校验）。任何无法确认的情形都拦。
+        """
+        sql_lower = sql.lower()
+        schema_cfg = self.sql_security_config.get("schema_limiter", {})
+
+        # 危险关键词（与 AST 校验保持一致）
+        dangerous_keywords = [
+            "INSERT", "UPDATE", "DELETE", "DROP", "TRUNCATE", "ALTER",
+            "CREATE", "GRANT", "REVOKE", "RENAME", "LOAD_FILE",
+            "INTO OUTFILE", "INTO DUMPFILE", "CALL", "EXEC", "EXECUTE",
+        ]
+        for kw in dangerous_keywords:
+            if re.search(r'\b' + re.escape(kw) + r'\b', sql, re.IGNORECASE):
+                return SecurityCheckResult(
+                    passed=False, layer="schema_limiter",
+                    reason=f"SQL 包含禁止操作: {kw}（解析失败兜底拦截）",
+                )
+
+        # 危险函数
+        for fn in ("sleep", "benchmark", "load_file"):
+            if re.search(r'\b' + fn + r'\s*\(', sql, re.IGNORECASE):
+                return SecurityCheckResult(
+                    passed=False, layer="sql_validator",
+                    reason=f"禁止使用函数: {fn}（解析失败兜底拦截）",
+                )
+
+        # 系统变量
+        if re.search(r'@@\w+', sql, re.IGNORECASE):
+            return SecurityCheckResult(
+                passed=False, layer="sql_validator",
+                reason="禁止访问系统变量 (@@)（解析失败兜底拦截）",
+            )
+
+        # 白名单表校验 —— 核心不变量
+        allowed_tables = {t.lower() for t in schema_cfg.get("allowed_tables", [])}
+        if allowed_tables:
+            found = self._extract_tables_regex(sql_lower)
+            unallowed = found - allowed_tables
+            if unallowed:
+                return SecurityCheckResult(
+                    passed=False, layer="schema_limiter",
+                    reason=f"访问了非白名单表: {', '.join(sorted(unallowed))}（解析失败兜底拦截）",
+                )
+
+        # 兜底校验通过：放行（记录警告，便于后续审查）
+        logger.warning("SQL parse failed but passed regex fallback (allowed): %.200s", sql)
+        return SecurityCheckResult(passed=True, sql_after_check=sql)
 
     # ============================================================
     # 第四层：结果检查
