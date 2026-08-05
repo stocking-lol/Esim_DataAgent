@@ -1,0 +1,85 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# --- Virtual Environments ---
+venv/
+.venv/
+env/
+.env/
+ENV/
+
+# --- Environment & Secrets ---
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# --- IDE ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- ChromaDB Data ---
+chromadb_data/
+chroma/
+*.duckdb
+
+# --- Temp / Cache ---
+f8c88490871f6169/
+*.tmp
+*.bak
+.cache/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Database ---
+*.sqlite3
+*.db
+
+# --- Test Results ---
+test_results/
+query_results_*.csv
+
+# --- Node (frontend) ---
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.next/

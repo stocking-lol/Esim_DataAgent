@@ -1,0 +1,82 @@
+version: "3.8"
+
+# ============================================
+# eSIM NL2SQL Platform - Docker Compose
+# ============================================
+
+services:
+  # --- MySQL 8.0 ---
+  mysql:
+    image: mysql:8.0
+    container_name: esim_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: esim_platform_pass
+      MYSQL_DATABASE: esim_platform
+      MYSQL_CHARSET: utf8mb4
+      MYSQL_COLLATION: utf8mb4_unicode_ci
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/01_init_db.sql
+      - ./scripts/seed_data.sql:/docker-entrypoint-initdb.d/02_seed_data.sql
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-pesim_platform_pass"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # --- ChromaDB (Vector Store) ---
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: esim_chromadb
+    restart: unless-stopped
+    ports:
+      - "8001:8000"
+    volumes:
+      - chromadb_data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - PERSIST_DIRECTORY=/chroma/chroma
+      - ANONYMIZED_TELEMETRY=FALSE
+      - ALLOW_RESET=TRUE
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # --- FastAPI (commented out during development, run locally) ---
+  # fastapi:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   container_name: esim_fastapi
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8000:8000"
+  #   environment:
+  #     - DATABASE_HOST=mysql
+  #     - CHROMADB_HOST=chromadb
+  #   env_file:
+  #     - .env
+  #   depends_on:
+  #     mysql:
+  #       condition: service_healthy
+  #     chromadb:
+  #       condition: service_healthy
+  #   volumes:
+  #     - .:/app
+
+volumes:
+  mysql_data:
+    driver: local
+  chromadb_data:
+    driver: local

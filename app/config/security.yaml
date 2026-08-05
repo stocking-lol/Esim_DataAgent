@@ -1,0 +1,87 @@
+# ============================================
+# eSIM NL2SQL Platform - Security Configuration
+# ============================================
+
+# --- SQL Security Gateway ---
+sql_security:
+  enabled: true
+
+  # Input filter (first line of defense)
+  input_filter:
+    enabled: true
+    max_question_length: 1000
+    blocked_patterns:
+      - "DROP\\s+(TABLE|DATABASE|SCHEMA)"
+      - "TRUNCATE\\s+TABLE"
+      - "ALTER\\s+(TABLE|DATABASE)"
+      - "CREATE\\s+(TABLE|DATABASE|SCHEMA)"
+      - "RENAME\\s+(TABLE|DATABASE)"
+      - "GRANT\\s+"
+      - "REVOKE\\s+"
+      - "INTO\\s+(OUTFILE|DUMPFILE)"
+      - "LOAD_FILE\\s*\\("
+      - "EXEC\\s*\\("
+      - "EXECUTE\\s+"
+      - "xp_cmdshell"
+      - "UNION\\s+SELECT"
+      - "OR\\s+1\\s*=\\s*1"
+      - "';\\s*--"
+      - "--\\s*$"
+
+  # Schema limiter (second line of defense)
+  schema_limiter:
+    enabled: true
+    allowed_tables:
+      - users
+      - plans
+      - orders
+      - esim_profiles
+      - data_usage
+      - operators
+      - roaming_packages
+    allowed_operations:
+      - SELECT
+    max_joins: 5
+    max_subqueries: 3
+
+  # SQL validator (third line of defense)
+  sql_validator:
+    enabled: true
+    use_sqlglot: true
+    max_query_length: 4000
+    required_keyword: "SELECT"
+
+  # Post checker (fourth line of defense)
+  post_checker:
+    enabled: true
+    rate_limit_check: true
+    result_size_limit: 1000
+
+# --- JWT ---
+jwt:
+  algorithm: HS256
+  token_prefix: "Bearer"
+
+# --- Rate Limiting ---
+rate_limit:
+  default: 60  # requests per minute
+  query: 30    # NL2SQL queries per minute
+
+# --- Audit ---
+audit:
+  log_queries: true
+  log_auth: true
+  log_admin: true
+  retention_days: 90
+
+# --- Data Masking ---
+masking:
+  enabled: true
+  fields:
+    - table: users
+      columns:
+        - phone_number
+        - email
+    - table: orders
+      columns:
+        - user_id
