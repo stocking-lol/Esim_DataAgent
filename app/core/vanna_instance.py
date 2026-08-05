@@ -28,13 +28,15 @@ logger = logging.getLogger(__name__)
 # --- 自定义 RunSqlTool（捕获生成的 SQL） ---
 
 class CapturingRunSqlTool(RunSqlTool):
-    """扩展 RunSqlTool，捕获 LLM 生成的 SQL 语句并执行安全校验
+    """扩展 RunSqlTool，捕获 LLM 生成的 SQL 语句并执行安全校验 + RLS 注入
 
     Vanna 2.0 的 RunSqlTool.execute() 不暴露 args.sql，
     本子类重写 execute() 来：
     1. 捕获 SQL 语句供 query_service 读取
     2. 在执行前通过 SQLSecurityGateway 校验 SQL 安全性
     3. 拦截危险 SQL，阻止执行
+    4. 注入 RLS 行级安全条件（非 admin 用户）
+    5. 添加查询超时提示
     """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -42,6 +44,9 @@ class CapturingRunSqlTool(RunSqlTool):
         self._last_sql: str = ""
         self._last_blocked: bool = False
         self._last_block_reason: str = ""
+        # RLS 用户上下文
+        self._current_role: str = "admin"
+        self._current_mvno_id: Any = None
 
     @property
     def last_sql(self) -> str:
@@ -58,8 +63,23 @@ class CapturingRunSqlTool(RunSqlTool):
         """最近一次拦截原因"""
         return self._last_block_reason
 
+    def set_user_context(self, role: str, mvno_id: Any) -> None:
+        """设置当前查询的用户上下文（用于 RLS）
+
+        Args:
+            role: 用户角色 (admin/analyst/viewer)
+            mvno_id: 用户所属 MVNO ID
+        """
+        self._current_role = role
+        self._current_mvno_id = mvno_id
+
+    def reset_user_context(self) -> None:
+        """重置用户上下文为默认值（admin）"""
+        self._current_role = "admin"
+        self._current_mvno_id = None
+
     async def execute(self, context: ToolContext, args: RunSqlToolArgs) -> ToolResult:
-        """执行 SQL 并捕获 SQL 语句，执行前进行安全校验"""
+        """执行 SQL 并捕获 SQL 语句，执行前进行安全校验 + RLS 注入"""
         # 捕获 SQL 语句
         self._last_sql = args.sql if hasattr(args, 'sql') else ""
         self._last_blocked = False
@@ -107,6 +127,41 @@ class CapturingRunSqlTool(RunSqlTool):
         except Exception as e:
             # 安全校验本身出错不阻塞执行，但记录警告
             logger.warning("SQL security check error (allowing execution): %s", e)
+
+        # --- RLS 行级安全条件注入 ---
+        try:
+            from app.services.rls_service import rls_service
+            rls_result = rls_service.inject_rls(
+                sql=self._last_sql,
+                role=self._current_role,
+                mvno_id=self._current_mvno_id,
+            )
+            if rls_result.rls_applied:
+                logger.info(
+                    "RLS injected: tables=%s, condition=%s",
+                    rls_result.rls_tables, rls_result.rls_condition,
+                )
+                try:
+                    args.sql = rls_result.sql
+                except Exception:
+                    pass
+                self._last_sql = rls_result.sql
+        except Exception as e:
+            logger.warning("RLS injection error (allowing without RLS): %s", e)
+
+        # --- 添加查询超时提示 ---
+        try:
+            from app.services.query_service import _add_timeout_hint
+            timed_sql = _add_timeout_hint(self._last_sql)
+            if timed_sql != self._last_sql:
+                logger.debug("Added MAX_EXECUTION_TIME hint to SQL")
+                try:
+                    args.sql = timed_sql
+                except Exception:
+                    pass
+                self._last_sql = timed_sql
+        except Exception as e:
+            logger.debug("Failed to add timeout hint: %s", e)
 
         # 调用父类方法执行 SQL
         return await super().execute(context, args)

@@ -1,0 +1,38 @@
+{
+  "mode": "static",
+  "total": 54,
+  "parse_ok": 54,
+  "tables_ok": 54,
+  "parse_rate": 1.0,
+  "tables_rate": 1.0,
+  "category_distribution": {
+    "single_table": 9,
+    "join": 6,
+    "aggregation": 9,
+    "time_series": 8,
+    "ranking": 9,
+    "group_by": 7,
+    "comparison": 6
+  },
+  "difficulty_distribution": {
+    "easy": 9,
+    "medium": 24,
+    "hard": 21
+  },
+  "invalid_items": [],
+  "meta": {
+    "test_set_version": "1.0",
+    "total_questions": 54,
+    "valid_tables": [
+      "data_usage",
+      "esim_profiles",
+      "operators",
+      "orders",
+      "plans",
+      "roaming_packages",
+      "users"
+    ],
+    "elapsed_seconds": 0.03,
+    "timestamp": "2026-08-06 04:53:51"
+  }
+}

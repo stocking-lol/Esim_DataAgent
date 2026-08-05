@@ -43,6 +43,19 @@ sql_security:
       - SELECT
     max_joins: 5
     max_subqueries: 3
+    # 角色级 Schema 访问控制
+    role_permissions:
+      admin:
+        tables: ["*"]
+        columns: "*"
+      analyst:
+        tables: ["users", "plans", "orders", "esim_profiles", "data_usage", "operators", "roaming_packages"]
+        columns: "*"
+      viewer:
+        tables: ["plans", "operators", "roaming_packages", "users", "orders"]
+        columns:
+          users: ["id", "region", "status", "created_at"]
+          orders: ["id", "plan_id", "status", "amount", "created_at"]
 
   # SQL validator (third line of defense)
   sql_validator:
@@ -85,3 +98,29 @@ masking:
     - table: orders
       columns:
         - user_id
+
+# --- Column-Level Data Masking (Day 17) ---
+data_masking:
+  enabled: true
+  rules:
+    - column: "phone_number"
+      pattern: "mask_middle"
+      roles_exempt: ["admin"]
+    - column: "iccid"
+      pattern: "mask_all_except_last4"
+      roles_exempt: ["admin"]
+    - column: "imsi"
+      pattern: "mask_all"
+      roles_exempt: ["admin"]
+    - column: "email"
+      pattern: "mask_email"
+      roles_exempt: ["admin"]
+    - column: "activation_code"
+      pattern: "mask_all"
+      roles_exempt: ["admin"]
+  # Role-based masking control
+  # admin: no masking | analyst: mask sensitive fields | viewer: mask all sensitive + restrict columns
+  role_policy:
+    admin: "none"        # admin 不脱敏
+    analyst: "sensitive"  # analyst 脱敏敏感字段
+    viewer: "sensitive"   # viewer 脱敏敏感字段（列级权限已在 Schema Linking 中控制）

@@ -17,7 +17,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from app.services.query_service import execute_query, execute_query_stream
+from app.services.query_service import execute_query, execute_query_with_retry, execute_query_stream
 from app.core.vanna_instance import vanna_manager
 from app.core.auth import get_optional_user
 
@@ -84,12 +84,6 @@ async def natural_language_query(
     接收自然语言问题，返回生成的 SQL 和查询结果。
     集成安全网关、数据脱敏和审计日志。
     """
-    if not vanna_manager.is_initialized:
-        raise HTTPException(
-            status_code=503,
-            detail="Vanna Agent 未初始化，服务暂不可用",
-        )
-
     logger.info("POST /query: '%s'", request.question[:100])
 
     # 获取可选用户信息
@@ -110,7 +104,51 @@ async def natural_language_query(
 
     ip_address = _get_client_ip(http_request)
 
-    result = await execute_query(
+    # --- 第一层安全：输入过滤（防御降级）---
+    # 即使 Vanna Agent 未初始化，也先执行输入过滤，阻断明显的注入/Prompt注入，
+    # 并返回 1001；同时写入审计日志，保证安全事件可追溯。
+    try:
+        from app.core.sql_security import sql_gateway
+        input_check = sql_gateway.check_input(request.question)
+        if not input_check.passed:
+            logger.warning("Input blocked at API layer: %s", input_check.reason)
+            try:
+                from app.services.audit_service import audit_service
+                audit_service.log_query(
+                    question=request.question,
+                    generated_sql="",
+                    execution_status="blocked",
+                    error_message=f"输入被安全网关拦截: {input_check.reason}",
+                    execution_time_ms=0,
+                    row_count=0,
+                    user_id=user_info["user_id"] if user_info else None,
+                    username=user_info["username"] if user_info else None,
+                    ip_address=ip_address,
+                    conversation_id=request.conversation_id,
+                )
+            except Exception:
+                pass
+            return QueryResponse(
+                code=1001,
+                message=f"安全拦截: {input_check.reason}",
+                data={
+                    "question": request.question,
+                    "blocked": True,
+                    "block_reason": input_check.reason,
+                    "execution_time_ms": 0,
+                },
+            )
+    except Exception as e:
+        logger.warning("Input filter error at API layer (allowing): %s", e)
+
+    # Agent 初始化检查
+    if not vanna_manager.is_initialized:
+        raise HTTPException(
+            status_code=503,
+            detail="Vanna Agent 未初始化，服务暂不可用",
+        )
+
+    result = await execute_query_with_retry(
         question=request.question,
         conversation_id=request.conversation_id,
         ip_address=ip_address,
@@ -120,6 +158,7 @@ async def natural_language_query(
 
     # 安全拦截
     if result.blocked:
+        http_request.state._security_blocked = True
         return QueryResponse(
             code=1001,
             message=f"安全拦截: {result.block_reason}",
@@ -159,6 +198,9 @@ async def natural_language_query(
             "truncated": len(result.data) > 100,
             "conversation_id": result.conversation_id,
             "masked_columns": result.masked_columns,
+            "retry_count": result.retry_count,
+            "corrections": result.corrections,
+            "chart": result.chart,
         },
     )
 

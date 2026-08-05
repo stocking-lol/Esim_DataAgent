@@ -65,6 +65,7 @@ services:
   #   environment:
   #     - DATABASE_HOST=mysql
   #     - CHROMADB_HOST=chromadb
+  #     - ENABLE_METRICS=true
   #   env_file:
   #     - .env
   #   depends_on:
@@ -75,8 +76,48 @@ services:
   #   volumes:
   #     - .:/app
 
+  # --- Prometheus (指标采集与告警) ---
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: esim_prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+    depends_on:
+      - fastapi
+
+  # --- Grafana (可视化仪表盘) ---
+  grafana:
+    image: grafana/grafana:latest
+    container_name: esim_grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=esim_grafana_2026
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
 volumes:
   mysql_data:
     driver: local
   chromadb_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
     driver: local

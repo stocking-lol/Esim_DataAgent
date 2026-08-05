@@ -1,0 +1,16 @@
+# ============================================
+# Grafana 仪表盘自动加载配置
+# ============================================
+apiVersion: 1
+
+providers:
+  - name: "nl2sql-dashboards"
+    orgId: 1
+    folder: "NL2SQL"
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards
+      puppeteer:
+        timeout: 60

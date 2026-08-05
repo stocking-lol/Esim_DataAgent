@@ -1,0 +1,779 @@
+{
+  "version": "1.0",
+  "description": "eSIM NL2SQL 平台评估测试集",
+  "total": 54,
+  "items": [
+    {
+      "id": "Q001",
+      "question": "查询所有 eSIM 套餐的名称和价格",
+      "category": "single_table",
+      "difficulty": "easy",
+      "gold_sql": "SELECT plan_name, price FROM plans",
+      "expected_tables": [
+        "plans"
+      ],
+      "keywords": [
+        "套餐",
+        "价格"
+      ]
+    },
+    {
+      "id": "Q002",
+      "question": "列出所有运营商的名称",
+      "category": "single_table",
+      "difficulty": "easy",
+      "gold_sql": "SELECT operator_name FROM operators",
+      "expected_tables": [
+        "operators"
+      ],
+      "keywords": [
+        "运营商"
+      ]
+    },
+    {
+      "id": "Q003",
+      "question": "查询 id 为 1 的用户信息",
+      "category": "single_table",
+      "difficulty": "easy",
+      "gold_sql": "SELECT * FROM users WHERE id = 1",
+      "expected_tables": [
+        "users"
+      ],
+      "keywords": [
+        "用户"
+      ]
+    },
+    {
+      "id": "Q004",
+      "question": "统计总共有多少个 eSIM 套餐",
+      "category": "single_table",
+      "difficulty": "easy",
+      "gold_sql": "SELECT COUNT(*) FROM plans",
+      "expected_tables": [
+        "plans"
+      ],
+      "keywords": [
+        "套餐数"
+      ]
+    },
+    {
+      "id": "Q005",
+      "question": "查询所有已激活的用户档案",
+      "category": "single_table",
+      "difficulty": "medium",
+      "gold_sql": "SELECT * FROM esim_profiles WHERE status = 'active'",
+      "expected_tables": [
+        "esim_profiles"
+      ],
+      "keywords": [
+        "激活",
+        "档案"
+      ]
+    },
+    {
+      "id": "Q006",
+      "question": "列出价格大于 50 元的套餐",
+      "category": "single_table",
+      "difficulty": "medium",
+      "gold_sql": "SELECT * FROM plans WHERE price > 50",
+      "expected_tables": [
+        "plans"
+      ],
+      "keywords": [
+        "套餐",
+        "价格"
+      ]
+    },
+    {
+      "id": "Q007",
+      "question": "查询所有处于漫游状态的套餐包",
+      "category": "single_table",
+      "difficulty": "medium",
+      "gold_sql": "SELECT * FROM roaming_packages WHERE status = 'active'",
+      "expected_tables": [
+        "roaming_packages"
+      ],
+      "keywords": [
+        "漫游"
+      ]
+    },
+    {
+      "id": "Q008",
+      "question": "查询每个订单对应的用户名和套餐名",
+      "category": "join",
+      "difficulty": "medium",
+      "gold_sql": "SELECT o.id, u.username, p.plan_name FROM orders o JOIN users u ON o.user_id = u.id JOIN plans p ON o.plan_id = p.id",
+      "expected_tables": [
+        "orders",
+        "users",
+        "plans"
+      ],
+      "keywords": [
+        "订单",
+        "用户",
+        "套餐"
+      ]
+    },
+    {
+      "id": "Q009",
+      "question": "查询每个用户的 eSIM 档案状态和用户名",
+      "category": "join",
+      "difficulty": "medium",
+      "gold_sql": "SELECT u.username, e.status FROM users u JOIN esim_profiles e ON u.id = e.user_id",
+      "expected_tables": [
+        "users",
+        "esim_profiles"
+      ],
+      "keywords": [
+        "用户",
+        "档案"
+      ]
+    },
+    {
+      "id": "Q010",
+      "question": "统计每个套餐的订单数量",
+      "category": "join",
+      "difficulty": "medium",
+      "gold_sql": "SELECT p.plan_name, COUNT(o.id) FROM plans p LEFT JOIN orders o ON p.id = o.plan_id GROUP BY p.plan_name",
+      "expected_tables": [
+        "plans",
+        "orders"
+      ],
+      "keywords": [
+        "套餐",
+        "订单数"
+      ]
+    },
+    {
+      "id": "Q011",
+      "question": "查询购买了尊享版套餐的用户邮箱",
+      "category": "join",
+      "difficulty": "hard",
+      "gold_sql": "SELECT u.email FROM users u JOIN orders o ON u.id = o.user_id JOIN plans p ON o.plan_id = p.id WHERE p.plan_name LIKE '%尊享%'",
+      "expected_tables": [
+        "users",
+        "orders",
+        "plans"
+      ],
+      "keywords": [
+        "邮箱",
+        "尊享"
+      ]
+    },
+    {
+      "id": "Q012",
+      "question": "查询每个运营商提供的套餐数量",
+      "category": "join",
+      "difficulty": "medium",
+      "gold_sql": "SELECT op.operator_name, COUNT(p.id) FROM operators op LEFT JOIN plans p ON op.id = p.operator_id GROUP BY op.operator_name",
+      "expected_tables": [
+        "operators",
+        "plans"
+      ],
+      "keywords": [
+        "运营商",
+        "套餐数"
+      ]
+    },
+    {
+      "id": "Q013",
+      "question": "统计每种订单状态的订单数量",
+      "category": "aggregation",
+      "difficulty": "medium",
+      "gold_sql": "SELECT status, COUNT(*) FROM orders GROUP BY status",
+      "expected_tables": [
+        "orders"
+      ],
+      "keywords": [
+        "状态",
+        "订单数"
+      ]
+    },
+    {
+      "id": "Q014",
+      "question": "计算所有套餐的平均价格",
+      "category": "aggregation",
+      "difficulty": "easy",
+      "gold_sql": "SELECT AVG(price) FROM plans",
+      "expected_tables": [
+        "plans"
+      ],
+      "keywords": [
+        "平均价格"
+      ]
+    },
+    {
+      "id": "Q015",
+      "question": "查询总销售额最高的套餐",
+      "category": "aggregation",
+      "difficulty": "hard",
+      "gold_sql": "SELECT p.plan_name, SUM(o.amount) FROM plans p JOIN orders o ON p.id = o.plan_id GROUP BY p.plan_name ORDER BY SUM(o.amount) DESC LIMIT 1",
+      "expected_tables": [
+        "plans",
+        "orders"
+      ],
+      "keywords": [
+        "销售额",
+        "套餐"
+      ]
+    },
+    {
+      "id": "Q016",
+      "question": "统计各地区的用户数量",
+      "category": "aggregation",
+      "difficulty": "medium",
+      "gold_sql": "SELECT region, COUNT(*) FROM users GROUP BY region",
+      "expected_tables": [
+        "users"
+      ],
+      "keywords": [
+        "地区",
+        "用户数"
+      ]
+    },
+    {
+      "id": "Q017",
+      "question": "查询所有订单的总金额",
+      "category": "aggregation",
+      "difficulty": "easy",
+      "gold_sql": "SELECT SUM(amount) FROM orders",
+      "expected_tables": [
+        "orders"
+      ],
+      "keywords": [
+        "总金额"
+      ]
+    },
+    {
+      "id": "Q018",
+      "question": "统计每个月的订单总数",
+      "category": "aggregation",
+      "difficulty": "hard",
+      "gold_sql": "SELECT DATE_FORMAT(created_at, '%Y-%m') AS month, COUNT(*) FROM orders GROUP BY month",
+      "expected_tables": [
+        "orders"
+      ],
+      "keywords": [
+        "月份",
+        "订单数"
+      ]
+    },
+    {
+      "id": "Q019",
+      "question": "查询平均订单金额",
+      "category": "aggregation",
+      "difficulty": "medium",
+      "gold_sql": "SELECT AVG(amount) FROM orders",
+      "expected_tables": [
+        "orders"
+      ],
+      "keywords": [
+        "平均金额"
+      ]
+    },
+    {
+      "id": "Q020",
+      "question": "查询最近 7 天的订单数量",
+      "category": "time_series",
+      "difficulty": "medium",
+      "gold_sql": "SELECT COUNT(*) FROM orders WHERE created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)",
+      "expected_tables": [
+        "orders"
+      ],
+      "keywords": [
+        "订单数",
+        "近7天"
+      ]
+    },
+    {
+      "id": "Q021",
+      "question": "按天统计上个月的订单量",
+      "category": "time_series",
+      "difficulty": "hard",
+      "gold_sql": "SELECT DATE(created_at) AS day, COUNT(*) FROM orders WHERE created_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH) GROUP BY day",
+      "expected_tables": [
+        "orders"
+      ],
+      "keywords": [
+        "天",
+        "订单量"
+      ]
+    },
+    {
+      "id": "Q022",
+      "question": "查询本月新增的用户数",
+      "category": "time_series",
+      "difficulty": "medium",
+      "gold_sql": "SELECT COUNT(*) FROM users WHERE created_at >= DATE_FORMAT(NOW(), '%Y-%m-01')",
+      "expected_tables": [
+        "users"
+      ],
+      "keywords": [
+        "本月",
+        "新增用户"
+      ]
+    },
+    {
+      "id": "Q023",
+      "question": "统计过去 30 天各套餐的激活量",
+      "category": "time_series",
+      "difficulty": "hard",
+      "gold_sql": "SELECT p.plan_name, COUNT(e.id) FROM esim_profiles e JOIN plans p ON e.plan_id = p.id WHERE e.activated_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) GROUP BY p.plan_name",
+      "expected_tables": [
+        "esim_profiles",
+        "plans"
+      ],
+      "keywords": [
+        "套餐",
+        "激活量"
+      ]
+    },
+    {
+      "id": "Q024",
+      "question": "查询每天的流量使用总量",
+      "category": "time_series",
+      "difficulty": "hard",
+      "gold_sql": "SELECT DATE(record_date) AS day, SUM(data_used_mb) FROM data_usage GROUP BY day",
+      "expected_tables": [
+        "data_usage"
+      ],
+      "keywords": [
+        "流量",
+        "天"
+      ]
+    },
+    {
+      "id": "Q025",
+      "question": "查询订单金额最高的前 5 个订单",
+      "category": "ranking",
+      "difficulty": "medium",
+      "gold_sql": "SELECT * FROM orders ORDER BY amount DESC LIMIT 5",
+      "expected_tables": [
+        "orders"
+      ],
+      "keywords": [
+        "订单",
+        "金额",
+        "前5"
+      ]
+    },
+    {
+      "id": "Q026",
+      "question": "按销售额对套餐进行排名",
+      "category": "ranking",
+      "difficulty": "hard",
+      "gold_sql": "SELECT p.plan_name, SUM(o.amount) AS total FROM plans p JOIN orders o ON p.id = o.plan_id GROUP BY p.plan_name ORDER BY total DESC",
+      "expected_tables": [
+        "plans",
+        "orders"
+      ],
+      "keywords": [
+        "排名",
+        "销售额"
+      ]
+    },
+    {
+      "id": "Q027",
+      "question": "查询流量使用最多的前 10 个用户",
+      "category": "ranking",
+      "difficulty": "hard",
+      "gold_sql": "SELECT user_id, SUM(data_used_mb) AS total FROM data_usage GROUP BY user_id ORDER BY total DESC LIMIT 10",
+      "expected_tables": [
+        "data_usage"
+      ],
+      "keywords": [
+        "流量",
+        "用户",
+        "前10"
+      ]
+    },
+    {
+      "id": "Q028",
+      "question": "查询注册用户数最多的地区",
+      "category": "ranking",
+      "difficulty": "medium",
+      "gold_sql": "SELECT region, COUNT(*) AS cnt FROM users GROUP BY region ORDER BY cnt DESC LIMIT 1",
+      "expected_tables": [
+        "users"
+      ],
+      "keywords": [
+        "地区",
+        "用户数"
+      ]
+    },
+    {
+      "id": "Q029",
+      "question": "按订单数排名运营商",
+      "category": "ranking",
+      "difficulty": "hard",
+      "gold_sql": "SELECT op.operator_name, COUNT(o.id) FROM operators op JOIN plans p ON op.id = p.operator_id JOIN orders o ON p.id = o.plan_id GROUP BY op.operator_name ORDER BY COUNT(o.id) DESC",
+      "expected_tables": [
+        "operators",
+        "plans",
+        "orders"
+      ],
+      "keywords": [
+        "运营商",
+        "订单数"
+      ]
+    },
+    {
+      "id": "Q030",
+      "question": "按套餐分组统计订单金额总和",
+      "category": "group_by",
+      "difficulty": "medium",
+      "gold_sql": "SELECT plan_id, SUM(amount) FROM orders GROUP BY plan_id",
+      "expected_tables": [
+        "orders"
+      ],
+      "keywords": [
+        "套餐",
+        "金额"
+      ]
+    },
+    {
+      "id": "Q031",
+      "question": "按状态分组统计档案数量",
+      "category": "group_by",
+      "difficulty": "medium",
+      "gold_sql": "SELECT status, COUNT(*) FROM esim_profiles GROUP BY status",
+      "expected_tables": [
+        "esim_profiles"
+      ],
+      "keywords": [
+        "状态",
+        "档案数"
+      ]
+    },
+    {
+      "id": "Q032",
+      "question": "按用户分组统计每个用户的订单数",
+      "category": "group_by",
+      "difficulty": "medium",
+      "gold_sql": "SELECT user_id, COUNT(*) FROM orders GROUP BY user_id",
+      "expected_tables": [
+        "orders"
+      ],
+      "keywords": [
+        "用户",
+        "订单数"
+      ]
+    },
+    {
+      "id": "Q033",
+      "question": "按运营商分组统计套餐平均价格",
+      "category": "group_by",
+      "difficulty": "hard",
+      "gold_sql": "SELECT operator_id, AVG(price) FROM plans GROUP BY operator_id",
+      "expected_tables": [
+        "plans"
+      ],
+      "keywords": [
+        "运营商",
+        "平均价格"
+      ]
+    },
+    {
+      "id": "Q034",
+      "question": "按地区分组统计激活用户数",
+      "category": "group_by",
+      "difficulty": "medium",
+      "gold_sql": "SELECT region, COUNT(*) FROM users WHERE status = 'active' GROUP BY region",
+      "expected_tables": [
+        "users"
+      ],
+      "keywords": [
+        "地区",
+        "激活用户"
+      ]
+    },
+    {
+      "id": "Q035",
+      "question": "查询价格高于平均价格的套餐",
+      "category": "comparison",
+      "difficulty": "hard",
+      "gold_sql": "SELECT * FROM plans WHERE price > (SELECT AVG(price) FROM plans)",
+      "expected_tables": [
+        "plans"
+      ],
+      "keywords": [
+        "套餐",
+        "平均价格"
+      ]
+    },
+    {
+      "id": "Q036",
+      "question": "查询订单金额大于 100 的订单",
+      "category": "comparison",
+      "difficulty": "easy",
+      "gold_sql": "SELECT * FROM orders WHERE amount > 100",
+      "expected_tables": [
+        "orders"
+      ],
+      "keywords": [
+        "订单",
+        "金额"
+      ]
+    },
+    {
+      "id": "Q037",
+      "question": "查询没有订单的用户",
+      "category": "comparison",
+      "difficulty": "hard",
+      "gold_sql": "SELECT * FROM users WHERE id NOT IN (SELECT DISTINCT user_id FROM orders)",
+      "expected_tables": [
+        "users",
+        "orders"
+      ],
+      "keywords": [
+        "用户",
+        "无订单"
+      ]
+    },
+    {
+      "id": "Q038",
+      "question": "对比基础版和尊享版套餐的价格差异",
+      "category": "comparison",
+      "difficulty": "hard",
+      "gold_sql": "SELECT plan_name, price FROM plans WHERE plan_name LIKE '%基础%' OR plan_name LIKE '%尊享%'",
+      "expected_tables": [
+        "plans"
+      ],
+      "keywords": [
+        "基础版",
+        "尊享版",
+        "价格"
+      ]
+    },
+    {
+      "id": "Q039",
+      "question": "查询流量使用超过 1GB 的用户",
+      "category": "comparison",
+      "difficulty": "medium",
+      "gold_sql": "SELECT user_id, SUM(data_used_mb) FROM data_usage GROUP BY user_id HAVING SUM(data_used_mb) > 1024",
+      "expected_tables": [
+        "data_usage"
+      ],
+      "keywords": [
+        "流量",
+        "1GB"
+      ]
+    },
+    {
+      "id": "Q040",
+      "question": "查询所有用户的用户名和注册地区",
+      "category": "single_table",
+      "difficulty": "easy",
+      "gold_sql": "SELECT username, region FROM users",
+      "expected_tables": [
+        "users"
+      ],
+      "keywords": [
+        "用户名",
+        "地区"
+      ]
+    },
+    {
+      "id": "Q041",
+      "question": "统计套餐表中价格最低的套餐",
+      "category": "ranking",
+      "difficulty": "medium",
+      "gold_sql": "SELECT * FROM plans ORDER BY price ASC LIMIT 1",
+      "expected_tables": [
+        "plans"
+      ],
+      "keywords": [
+        "最低价格",
+        "套餐"
+      ]
+    },
+    {
+      "id": "Q042",
+      "question": "查询最近注册的 10 个用户",
+      "category": "ranking",
+      "difficulty": "medium",
+      "gold_sql": "SELECT * FROM users ORDER BY created_at DESC LIMIT 10",
+      "expected_tables": [
+        "users"
+      ],
+      "keywords": [
+        "用户",
+        "最近注册"
+      ]
+    },
+    {
+      "id": "Q043",
+      "question": "统计已激活档案占全部档案的比例",
+      "category": "aggregation",
+      "difficulty": "hard",
+      "gold_sql": "SELECT status, COUNT(*) FROM esim_profiles GROUP BY status",
+      "expected_tables": [
+        "esim_profiles"
+      ],
+      "keywords": [
+        "激活",
+        "档案"
+      ]
+    },
+    {
+      "id": "Q044",
+      "question": "查询每个运营商的漫游套餐数量",
+      "category": "join",
+      "difficulty": "hard",
+      "gold_sql": "SELECT op.operator_name, COUNT(r.id) FROM operators op JOIN plans p ON op.id = p.operator_id JOIN roaming_packages r ON p.id = r.plan_id GROUP BY op.operator_name",
+      "expected_tables": [
+        "operators",
+        "plans",
+        "roaming_packages"
+      ],
+      "keywords": [
+        "运营商",
+        "漫游套餐"
+      ]
+    },
+    {
+      "id": "Q045",
+      "question": "查询本月订单金额总和",
+      "category": "time_series",
+      "difficulty": "medium",
+      "gold_sql": "SELECT SUM(amount) FROM orders WHERE created_at >= DATE_FORMAT(NOW(), '%Y-%m-01')",
+      "expected_tables": [
+        "orders"
+      ],
+      "keywords": [
+        "本月",
+        "金额"
+      ]
+    },
+    {
+      "id": "Q046",
+      "question": "统计各套餐的退款订单数",
+      "category": "group_by",
+      "difficulty": "hard",
+      "gold_sql": "SELECT plan_id, COUNT(*) FROM orders WHERE status = 'refunded' GROUP BY plan_id",
+      "expected_tables": [
+        "orders"
+      ],
+      "keywords": [
+        "套餐",
+        "退款"
+      ]
+    },
+    {
+      "id": "Q047",
+      "question": "查询所有套餐中价格最高的三个",
+      "category": "ranking",
+      "difficulty": "medium",
+      "gold_sql": "SELECT * FROM plans ORDER BY price DESC LIMIT 3",
+      "expected_tables": [
+        "plans"
+      ],
+      "keywords": [
+        "价格",
+        "前3"
+      ]
+    },
+    {
+      "id": "Q048",
+      "question": "统计本周新增的 eSIM 档案数",
+      "category": "time_series",
+      "difficulty": "medium",
+      "gold_sql": "SELECT COUNT(*) FROM esim_profiles WHERE created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)",
+      "expected_tables": [
+        "esim_profiles"
+      ],
+      "keywords": [
+        "本周",
+        "档案"
+      ]
+    },
+    {
+      "id": "Q049",
+      "question": "查询每个用户的平均订单金额",
+      "category": "group_by",
+      "difficulty": "hard",
+      "gold_sql": "SELECT user_id, AVG(amount) FROM orders GROUP BY user_id",
+      "expected_tables": [
+        "orders"
+      ],
+      "keywords": [
+        "用户",
+        "平均金额"
+      ]
+    },
+    {
+      "id": "Q050",
+      "question": "列出所有状态为 pending 的订单",
+      "category": "single_table",
+      "difficulty": "easy",
+      "gold_sql": "SELECT * FROM orders WHERE status = 'pending'",
+      "expected_tables": [
+        "orders"
+      ],
+      "keywords": [
+        "订单",
+        "pending"
+      ]
+    },
+    {
+      "id": "Q051",
+      "question": "查询使用流量最多的套餐",
+      "category": "ranking",
+      "difficulty": "hard",
+      "gold_sql": "SELECT p.plan_name, SUM(d.data_used_mb) FROM plans p JOIN data_usage d ON p.id = d.plan_id GROUP BY p.plan_name ORDER BY SUM(d.data_used_mb) DESC LIMIT 1",
+      "expected_tables": [
+        "plans",
+        "data_usage"
+      ],
+      "keywords": [
+        "套餐",
+        "流量"
+      ]
+    },
+    {
+      "id": "Q052",
+      "question": "统计不同地区的活跃用户占比",
+      "category": "aggregation",
+      "difficulty": "hard",
+      "gold_sql": "SELECT region, COUNT(*) FROM users WHERE status = 'active' GROUP BY region",
+      "expected_tables": [
+        "users"
+      ],
+      "keywords": [
+        "地区",
+        "活跃"
+      ]
+    },
+    {
+      "id": "Q053",
+      "question": "查询没有关联档案的用户",
+      "category": "comparison",
+      "difficulty": "hard",
+      "gold_sql": "SELECT * FROM users WHERE id NOT IN (SELECT DISTINCT user_id FROM esim_profiles)",
+      "expected_tables": [
+        "users",
+        "esim_profiles"
+      ],
+      "keywords": [
+        "用户",
+        "无档案"
+      ]
+    },
+    {
+      "id": "Q054",
+      "question": "按月份统计各套餐销量",
+      "category": "time_series",
+      "difficulty": "hard",
+      "gold_sql": "SELECT p.plan_name, DATE_FORMAT(o.created_at, '%Y-%m') AS month, COUNT(*) FROM plans p JOIN orders o ON p.id = o.plan_id GROUP BY p.plan_name, month",
+      "expected_tables": [
+        "plans",
+        "orders"
+      ],
+      "keywords": [
+        "套餐",
+        "销量",
+        "月份"
+      ]
+    }
+  ]
+}

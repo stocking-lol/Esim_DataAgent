@@ -16,6 +16,7 @@ if str(_project_root) not in sys.path:
 from fastapi import FastAPI
 from fastapi.exceptions import HTTPException, RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import ValidationError
 
 import logging
@@ -150,6 +151,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- Prometheus 监控（在 CORS 之后、路由之前注册）---
+Instrumentator(
+    should_group_status_codes=True,
+    should_ignore_untemplated=True,
+    should_respect_env_var=True,
+    env_var_name="ENABLE_METRICS",
+    excluded_handlers=["/docs", "/redoc", "/openapi.json"],
+).instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+
+from app.middleware.metrics import MetricsMiddleware
+app.add_middleware(MetricsMiddleware)
+
 # --- 限流中间件 ---
 from app.middleware.rate_limit import RateLimitMiddleware
 app.add_middleware(
@@ -157,6 +170,10 @@ app.add_middleware(
     query_limit=30,     # /api/v1/query: 30 次/分钟
     default_limit=60,   # 其他 API: 60 次/分钟
 )
+
+# --- 审计中间件 ---
+from app.middleware.audit import AuditMiddleware
+app.add_middleware(AuditMiddleware)
 
 # --- 注册全局异常处理器 ---
 app.add_exception_handler(AppException, app_exception_handler)

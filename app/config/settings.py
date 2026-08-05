@@ -69,8 +69,14 @@ class Settings(BaseSettings):
 
     # --- Query Safety ---
     QUERY_TIMEOUT_SECONDS: int = 30
+    SLOW_QUERY_THRESHOLD_SECONDS: int = 5
     MAX_QUERY_ROWS: int = 1000
     QUERY_HISTORY_DAYS: int = 90
+
+    # --- Query Cache (性能优化) ---
+    QUERY_CACHE_ENABLED: bool = True
+    QUERY_CACHE_TTL_SECONDS: int = 60
+    QUERY_CACHE_MAX_SIZE: int = 200
 
     # --- Rate Limiting ---
     RATE_LIMIT_PER_MINUTE: int = 60

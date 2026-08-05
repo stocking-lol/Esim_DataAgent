@@ -140,9 +140,87 @@ class AuthManager:
         }
 
 
+class DBAuthManager:
+    """基于数据库的认证管理器
+
+    查询 app_users 表进行认证。
+    若数据库不可用，调用方可回退到 AuthManager（DEMO_USERS）。
+    """
+
+    @staticmethod
+    def authenticate(username: str, password: str) -> Optional[dict]:
+        """通过 app_users 表验证用户名密码
+
+        Returns:
+            dict: 用户信息（不含密码）或 None
+        """
+        try:
+            from app.services.auth_service import auth_service
+
+            user = auth_service.authenticate_user(username, password)
+            if not user:
+                return None
+            return {
+                "user_id": user.id,
+                "username": user.username,
+                "role": user.role,
+                "mvno_id": user.mvno_id,
+            }
+        except Exception as e:
+            logger.warning("DBAuthManager 查询失败，将回退到 DEMO_USERS: %s", e)
+            return None
+
+    @staticmethod
+    def login(username: str, password: str) -> Optional[dict]:
+        """用户登录，返回 token 和用户信息
+
+        优先使用数据库认证，失败返回 None（调用方可回退到 AuthManager）。
+        """
+        user = DBAuthManager.authenticate(username, password)
+        if not user:
+            return None
+
+        token = JWTManager.create_access_token({
+            "sub": str(user["user_id"]),
+            "username": user["username"],
+            "role": user["role"],
+        })
+
+        return {
+            "access_token": token,
+            "token_type": "bearer",
+            "user": user,
+        }
+
+
 # 全局实例
 jwt_manager = JWTManager()
 auth_manager = AuthManager()
+db_auth_manager = DBAuthManager()
+
+
+def login_with_fallback(username: str, password: str) -> Optional[dict]:
+    """登录流程：DB 优先，回退到 DEMO_USERS
+
+    Args:
+        username: 用户名
+        password: 密码
+
+    Returns:
+        dict: 登录结果（含 token 和用户信息）或 None
+    """
+    # 1. 尝试数据库认证
+    result = DBAuthManager.login(username, password)
+    if result:
+        return result
+
+    # 2. 回退到内存中的 DEMO_USERS
+    result = AuthManager.login(username, password)
+    if result:
+        logger.info("用户 '%s' 通过 DEMO_USERS 认证（数据库中未找到）", username)
+        return result
+
+    return None
 
 
 # ============================================================

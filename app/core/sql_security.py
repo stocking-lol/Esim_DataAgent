@@ -66,6 +66,35 @@ class SQLSecurityGateway:
     def sql_security_config(self) -> dict:
         return self._config.get("sql_security", {})
 
+    # Prompt 注入检测模式（中英文）
+    PROMPT_INJECTION_PATTERNS = [
+        r"(?i)ignore\s+(previous|prior|above|all)\s+(instruction|prompt|rule)",
+        r"(?i)disregard\s+(previous|prior|above|all)\s+(instruction|prompt)",
+        r"(?i)you\s+are\s+(a|an)\s+(dba|admin|root|system|database)",
+        r"(?i)act\s+as\s+(a|an)\s+(dba|admin|root|system)",
+        r"(?i)system\s*[:：]\s*",
+        r"(?i)forget\s+(everything|all|previous)",
+        r"(?i)new\s+instruction\s*[:：]",
+        r"(?i)override\s+(system|safety|security)\s+(rule|prompt|instruction)",
+        r"(?i)忽略(之前|前面|上面|所有)(的)?(指令|提示|规则|设定)",
+        r"(?i) disregard (以上|之前|前面)",
+        r"(?i)你(现在|从现在起)?(是|扮演)(管理员|DBA|root|系统|超级用户)",
+        r"(?i)忘记(之前|前面|所有)(的)?(指令|设定|规则)",
+        r"(?i)新指令[:：]",
+        r"(?i)覆盖(系统|安全)(规则|设定)",
+    ]
+
+    # 可疑字符组合
+    SUSPICIOUS_CHARS = [
+        (r";\s*--", "SQL注释注入 (; --)"),
+        (r"/\*.*\*/", "SQL块注释 (/* */)"),
+        (r"xp_\w+", "SQL Server扩展存储过程 (xp_)"),
+        (r"0x[0-9a-fA-F]{8,}", "十六进制编码字符串"),
+        (r"CHAR\s*\(\s*\d+", "CHAR()编码绕过"),
+        (r"CONCAT\s*\(", "CONCAT函数注入"),
+        (r";\s*(DROP|DELETE|UPDATE|INSERT|ALTER|CREATE)", "堆叠注入"),
+    ]
+
     # ============================================================
     # 第一层：输入过滤
     # ============================================================
@@ -73,7 +102,7 @@ class SQLSecurityGateway:
     def check_input(self, question: str) -> SecurityCheckResult:
         """检查用户输入是否包含危险模式
 
-        拦截 SQL 注入尝试和危险关键词，在发送给 LLM 之前执行。
+        拦截 SQL 注入尝试、Prompt 注入和可疑字符，在发送给 LLM 之前执行。
         """
         input_filter_cfg = self.sql_security_config.get("input_filter", {})
         if not input_filter_cfg.get("enabled", True):
@@ -88,7 +117,17 @@ class SQLSecurityGateway:
                 reason=f"输入过长（{len(question)} > {max_len}）",
             )
 
-        # 危险模式匹配
+        # --- Prompt 注入检测（优先于SQL注入模式，因为可能同时包含两者）---
+        for pattern in self.PROMPT_INJECTION_PATTERNS:
+            if re.search(pattern, question):
+                return SecurityCheckResult(
+                    passed=False,
+                    layer="input_filter",
+                    reason=f"检测到Prompt注入尝试: {pattern[:50]}",
+                    blocked_patterns=[pattern],
+                )
+
+        # --- SQL 注入模式匹配 ---
         blocked = input_filter_cfg.get("blocked_patterns", [])
         matched = []
         for pattern in blocked:
@@ -102,11 +141,60 @@ class SQLSecurityGateway:
             return SecurityCheckResult(
                 passed=False,
                 layer="input_filter",
-                reason=f"输入包含危险模式: {matched[0]}",
+                reason=f"输入包含SQL注入模式: {matched[0]}",
                 blocked_patterns=matched,
             )
 
+        # --- Prompt 注入检测 ---
+        for pattern in self.PROMPT_INJECTION_PATTERNS:
+            if re.search(pattern, question):
+                return SecurityCheckResult(
+                    passed=False,
+                    layer="input_filter",
+                    reason=f"检测到Prompt注入尝试: {pattern[:50]}",
+                    blocked_patterns=[pattern],
+                )
+
+        # --- 可疑字符组合检测 ---
+        for pattern, description in self.SUSPICIOUS_CHARS:
+            if re.search(pattern, question, re.IGNORECASE):
+                return SecurityCheckResult(
+                    passed=False,
+                    layer="input_filter",
+                    reason=f"可疑字符组合: {description}",
+                    blocked_patterns=[pattern],
+                )
+
         return SecurityCheckResult(passed=True)
+
+    def sanitize(self, question: str) -> str:
+        """清理用户输入
+
+        - 去除 HTML/XML 标签（防 XSS）
+        - 去除控制字符（保留换行和制表符）
+        - 规范化空白字符
+        - 限制长度
+        """
+        if not question:
+            return ""
+
+        # 去除 HTML/XML 标签（防 XSS）
+        cleaned = re.sub(r'<[^>]+>', '', question)
+
+        # 去除控制字符（保留 \n \r \t）
+        cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', cleaned)
+
+        # 规范化空白：多个空格变一个，去除首尾空白
+        cleaned = re.sub(r'[ ]{2,}', ' ', cleaned).strip()
+
+        # 限制长度
+        max_len = self.sql_security_config.get("input_filter", {}).get(
+            "max_question_length", 1000
+        )
+        if len(cleaned) > max_len:
+            cleaned = cleaned[:max_len]
+
+        return cleaned
 
     # ============================================================
     # 第二层 + 第三层：SQL 校验（Schema 限制 + SQL Validator）
@@ -177,7 +265,14 @@ class SQLSecurityGateway:
             # 解析失败不直接拦截，可能是非标准语法，让 DB 自己报错
             return SecurityCheckResult(passed=True, sql_after_check=sql)
 
-        # 检查表名是否在白名单
+        # 收集 CTE 别名（WITH ... AS 中的别名不是真实表，不应受白名单限制）
+        cte_names: set[str] = set()
+        for cte_node in parsed.find_all(exp.CTE):
+            alias = cte_node.alias
+            if alias:
+                cte_names.add(alias.lower())
+
+        # 检查表名是否在白名单（排除 CTE 别名）
         allowed_tables = set(schema_cfg.get("allowed_tables", []))
         if allowed_tables:
             found_tables = set()
@@ -186,7 +281,7 @@ class SQLSecurityGateway:
                 if table_name:
                     found_tables.add(table_name.lower())
 
-            unallowed = found_tables - {t.lower() for t in allowed_tables}
+            unallowed = found_tables - {t.lower() for t in allowed_tables} - cte_names
             if unallowed:
                 return SecurityCheckResult(
                     passed=False,
@@ -214,9 +309,10 @@ class SQLSecurityGateway:
                 reason=f"子查询数量超限（{subquery_count} > {max_subqueries}）",
             )
 
-        # 检查危险函数
+        # 检查危险函数（包括 sqlglot 已知函数和匿名函数）
         dangerous_funcs = {"LOAD_FILE", "SLEEP", "BENCHMARK", "USER", "DATABASE",
-                          "CURRENT_USER", "CONNECTION_ID", "@@version"}
+                          "CURRENT_USER", "CONNECTION_ID"}
+        # 检查已知函数
         for func_node in parsed.find_all(exp.Func):
             func_name = func_node.sql_name() if hasattr(func_node, "sql_name") else ""
             if func_name and func_name.upper() in dangerous_funcs:
@@ -225,16 +321,23 @@ class SQLSecurityGateway:
                     layer="sql_validator",
                     reason=f"禁止使用函数: {func_name}",
                 )
-
-        # 检查系统变量引用
-        for param_node in parsed.find_all(exp.Parameter):
-            param_text = str(param_node)
-            if "@@" in param_text:
+        # 兜底：正则检查危险函数名（SLEEP、BENCHMARK 等可能被 sqlglot 解析为匿名函数）
+        for func_name in dangerous_funcs:
+            pattern = r'\b' + func_name + r'\s*\('
+            if re.search(pattern, sql, re.IGNORECASE):
                 return SecurityCheckResult(
                     passed=False,
                     layer="sql_validator",
-                    reason=f"禁止访问系统变量: {param_text}",
+                    reason=f"禁止使用函数: {func_name}",
                 )
+
+        # 检查系统变量引用（@@version 等）
+        if re.search(r'@@\w+', sql, re.IGNORECASE):
+            return SecurityCheckResult(
+                passed=False,
+                layer="sql_validator",
+                reason="禁止访问系统变量 (@@)",
+            )
 
         # 如果没有 LIMIT，自动添加
         post_cfg = self.sql_security_config.get("post_checker", {})

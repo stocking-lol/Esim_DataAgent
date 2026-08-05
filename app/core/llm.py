@@ -38,8 +38,19 @@ SQL_GENERATION_SYSTEM_PROMPT = """你是一个专业的 SQL 查询生成助手�
 SQL_EXPLAIN_SYSTEM_PROMPT = """你是一个 SQL 查询解释助手。请用通俗易懂的中文解释以下 SQL 查询的含义。
 说明查询的目的、涉及的表、关键条件和预期结果。"""
 
-SQL_CORRECT_SYSTEM_PROMPT = """你是一个 SQL 调试助手。以下是生成SQL时出错的情况。请根据错误信息和原始问题修正SQL。
-只返回修正后的纯 SQL 语句，不要有任何解释或 markdown 格式。"""
+SQL_SUMMARY_SYSTEM_PROMPT = """你是一个数据分析助手。用户提出了一个数据问题，系统执行 SQL 后返回了查询结果。
+请用 1-3 句话，用通俗易懂的中文总结这些数据的核心结论（如总量、趋势、排名、占比等），
+不要复述 SQL，不要罗列全部原始数据。如果数据为空，请说明未查到相关数据。"""
+
+SQL_CORRECT_SYSTEM_PROMPT = """你是一个 SQL 调试助手。以下是生成 SQL 时出错的情况。
+请根据错误信息、错误类型提示和原始问题修正 SQL。
+
+规则：
+1. 只返回修正后的纯 SQL 语句，不要有任何解释或 markdown 格式
+2. 只使用数据库 DDL 中真实存在的表和列
+3. 如果是表名/列名错误，请参考已有 DDL 修正
+4. 如果是语法错误，请修正语法后返回
+5. 保持 SELECT 查询语义与原问题一致"""
 
 
 class LLMService:
@@ -187,25 +198,72 @@ class LLMService:
         explanation = await self._call_llm(SQL_EXPLAIN_SYSTEM_PROMPT, user_message)
         return explanation
 
-    async def correct_sql(self, sql: str, error_message: str) -> str:
+    async def correct_sql(
+        self,
+        sql: str,
+        error_message: str,
+        correction_hint: str = "",
+        ddl: str = "",
+    ) -> str:
         """根据错误信息修正 SQL
 
         Args:
             sql: 原始 SQL 语句
             error_message: 数据库返回的错误信息
+            correction_hint: 错误分类器给出的针对性修正提示
+            ddl: 数据库表结构（可选，帮助 LLM 选择正确表/列）
 
         Returns:
             修正后的 SQL 语句
         """
-        user_message = (
-            f"原始 SQL 查询：\n{sql}\n\n"
-            f"执行错误信息：\n{error_message}\n\n"
-            f"请修正以上 SQL 查询语句。"
-        )
-        logger.info("correct_sql: error='%.100s...'", error_message)
+        parts = [
+            f"原始 SQL 查询：\n{sql}",
+            f"执行错误信息：\n{error_message}",
+        ]
+        if correction_hint:
+            parts.append(f"错误类型与修正建议：\n{correction_hint}")
+        if ddl:
+            parts.append(f"可用表结构参考（DDL）：\n{ddl}")
+        parts.append("请修正以上 SQL 查询语句。")
+
+        user_message = "\n\n".join(parts)
+        logger.info("correct_sql: error='%.100s...', hint='%.50s...'",
+                    error_message, correction_hint)
         corrected = await self._call_llm(SQL_CORRECT_SYSTEM_PROMPT, user_message)
         logger.info("correct_sql: corrected='%.200s...'", corrected)
         return corrected
+
+    async def generate_summary(
+        self,
+        question: str,
+        sql: str,
+        data: list[dict[str, Any]],
+        columns: list[str],
+    ) -> str:
+        """根据查询结果生成自然语言摘要
+
+        Args:
+            question: 用户的自然语言问题
+            sql: 执行的 SQL 语句
+            data: 查询结果行列表
+            columns: 列名列表
+
+        Returns:
+            str: 中文摘要（1-3 句）
+        """
+        # 为避免上下文过大，最多取样 10 行
+        sample = data[:10]
+        user_message = (
+            f"用户问题：{question}\n\n"
+            f"执行 SQL：{sql}\n\n"
+            f"返回列：{columns}\n\n"
+            f"返回数据（最多 10 行）：\n{sample}\n\n"
+            f"数据总行数：{len(data)}\n\n"
+            f"请总结核心结论。"
+        )
+        summary = await self._call_llm(SQL_SUMMARY_SYSTEM_PROMPT, user_message, temperature=0.3)
+        logger.info("generate_summary: '%.100s...'", summary)
+        return summary
 
 
 class LLMException(Exception):

@@ -1,0 +1,32 @@
+# ============================================
+# Prometheus 配置 — eSIM NL2SQL Platform
+# ============================================
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+
+# 告警规则加载
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+# 告警管理器（可选，生产环境建议启用）
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+# 抓取目标
+scrape_configs:
+  # --- NL2SQL FastAPI 服务（/metrics 端点）---
+  - job_name: "nl2sql-api"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["fastapi:8000"]
+        labels:
+          service: "nl2sql-platform"
+
+  # --- Prometheus 自身 ---
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]

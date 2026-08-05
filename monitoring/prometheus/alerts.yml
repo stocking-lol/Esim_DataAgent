@@ -1,0 +1,75 @@
+# ============================================
+# Prometheus 告警规则 — eSIM NL2SQL Platform
+# ============================================
+groups:
+  - name: nl2sql_alerts
+    interval: 30s
+    rules:
+      # --- 告警 1: 安全拦截率过高 ---
+      # 当最近 5 分钟内安全拦截占查询总数比例 > 5% 时触发
+      - alert: HighSecurityBlockRate
+        expr: |
+          (
+            sum(rate(nl2sql_security_blocked_total[5m])) > 0
+            and
+            sum(rate(nl2sql_security_blocked_total[5m]))
+              / clamp_min(sum(rate(nl2sql_query_total[5m])), 0.001) > 0.05
+          )
+        for: 2m
+        labels:
+          severity: warning
+          service: nl2sql-platform
+        annotations:
+          summary: "安全拦截率超过 5%"
+          description: "最近 5 分钟安全拦截率为 {{ $value | humanizePercentage }}，超过阈值 5%。可能存在攻击尝试或误报。"
+
+      # --- 告警 2: 平均响应时间过长 ---
+      # 当最近 5 分钟 P95 查询耗时 > 2s 时触发
+      - alert: HighQueryLatency
+        expr: histogram_quantile(0.95, sum(rate(nl2sql_query_duration_seconds_bucket[5m])) by (le)) > 2
+        for: 3m
+        labels:
+          severity: warning
+          service: nl2sql-platform
+        annotations:
+          summary: "查询 P95 延迟超过 2 秒"
+          description: "NL2SQL 查询 P95 延迟为 {{ $value | humanizeDuration }}，超过 2 秒阈值。"
+
+      # --- 告警 3: 错误率过高 ---
+      # 当最近 5 分钟内 error 状态占比 > 10% 时触发
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(nl2sql_query_total{status="error"}[5m]))
+            / clamp_min(sum(rate(nl2sql_query_total[5m])), 0.001) > 0.10
+        for: 3m
+        labels:
+          severity: critical
+          service: nl2sql-platform
+        annotations:
+          summary: "查询错误率超过 10%"
+          description: "最近 5 分钟查询错误率为 {{ $value | humanizePercentage }}，超过 10% 阈值。"
+
+      # --- 告警 4: 自我纠错率过高 ---
+      # 当最近 10 分钟内纠错尝试频繁（> 30% 查询需要纠错）时触发
+      - alert: HighCorrectionRate
+        expr: |
+          sum(rate(nl2sql_correction_total[10m]))
+            / clamp_min(sum(rate(nl2sql_query_total[10m])), 0.001) > 0.30
+        for: 5m
+        labels:
+          severity: warning
+          service: nl2sql-platform
+        annotations:
+          summary: "自我纠错率超过 30%"
+          description: "最近 10 分钟纠错率为 {{ $value | humanizePercentage }}，超过 30% 阈值，SQL 生成质量可能下降。"
+
+      # --- 告警 5: 服务不可用 ---
+      - alert: ApiDown
+        expr: up{job="nl2sql-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: nl2sql-platform
+        annotations:
+          summary: "NL2SQL API 服务不可用"
+          description: "Prometheus 无法抓取 nl2sql-api 指标，服务可能已宕机。"

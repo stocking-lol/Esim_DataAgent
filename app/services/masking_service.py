@@ -24,11 +24,18 @@ class MaskingService:
     支持两种模式：
     1. 按列名脱敏：查询结果中包含指定列名时自动脱敏
     2. 按内容脱敏：用正则匹配手机号、邮箱等模式
+
+    Day 17 增强：
+    3. 基于角色的脱敏控制（admin 豁免）
+    4. 多种脱敏模式（mask_middle / mask_all_except_last4 / mask_all / mask_email）
+    5. 配置驱动的脱敏规则（security.yaml -> data_masking）
     """
 
     _instance: "MaskingService | None" = None
     _config: dict = None
     _column_rules: dict[str, list[str]] = {}  # table -> [columns]
+    _data_masking_rules: dict[str, dict] = {}  # column_name -> {pattern, roles_exempt}
+    _role_policy: dict[str, str] = {}  # role -> "none" | "sensitive"
 
     def __new__(cls) -> "MaskingService":
         if cls._instance is None:
@@ -42,6 +49,7 @@ class MaskingService:
             with open(_SECURITY_YAML, "r", encoding="utf-8") as f:
                 self._config = yaml.safe_load(f) or {}
 
+            # 基础脱敏配置
             masking_cfg = self._config.get("masking", {})
             if masking_cfg.get("enabled", True):
                 for entry in masking_cfg.get("fields", []):
@@ -51,6 +59,25 @@ class MaskingService:
                 logger.info("Masking service enabled: %s", self._column_rules)
             else:
                 logger.info("Masking service disabled")
+
+            # Day 17: 列级脱敏规则
+            data_masking_cfg = self._config.get("data_masking", {})
+            if data_masking_cfg.get("enabled", True):
+                for rule in data_masking_cfg.get("rules", []):
+                    col = rule.get("column", "").lower()
+                    pattern = rule.get("pattern", "mask_middle")
+                    roles_exempt = rule.get("roles_exempt", [])
+                    self._data_masking_rules[col] = {
+                        "pattern": pattern,
+                        "roles_exempt": roles_exempt,
+                    }
+                self._role_policy = data_masking_cfg.get("role_policy", {
+                    "admin": "none",
+                    "analyst": "sensitive",
+                    "viewer": "sensitive",
+                })
+                logger.info("Data masking rules loaded: %d columns, policies: %s",
+                           len(self._data_masking_rules), self._role_policy)
         except Exception as e:
             logger.error("Failed to load masking config: %s", e)
 
@@ -130,12 +157,14 @@ class MaskingService:
         self,
         data: list[dict[str, Any]],
         columns: list[str],
+        role: str = "analyst",
     ) -> tuple[list[dict[str, Any]], list[str]]:
-        """对查询结果进行脱敏处理
+        """对查询结果进行脱敏处理（基于角色）
 
         Args:
             data: 查询结果行列表
             columns: 列名列表
+            role: 用户角色 (admin/analyst/viewer)
 
         Returns:
             tuple: (脱敏后的数据, 脱敏的列名列表)
@@ -143,38 +172,96 @@ class MaskingService:
         if not self.enabled or not data:
             return data, []
 
+        # admin 角色不脱敏
+        if self._is_role_exempt(role):
+            return data, []
+
         masked_columns = set()
-        sensitive_col_names = {"phone_number", "email", "iccid", "imsi",
-                              "activation_code", "phone", "mobile"}
 
         for row in data:
             for col in list(row.keys()):
                 col_lower = col.lower()
+                value = row[col]
 
-                # 按列名判断
-                if col_lower in sensitive_col_names:
-                    value = str(row[col]) if row[col] is not None else row[col]
-                    if col_lower in ("phone_number", "phone", "mobile"):
-                        row[col] = self.mask_phone(value) if value else value
-                    elif col_lower == "email":
-                        row[col] = self.mask_email(value) if value else value
-                    elif col_lower == "iccid":
-                        row[col] = self.mask_iccid(value) if value else value
-                    elif col_lower == "imsi":
-                        row[col] = self.mask_imsi(value) if value else value
-                    elif col_lower == "activation_code":
-                        row[col] = self.mask_generic(value) if value else value
+                # None 或非字符串值跳过内容检测
+                if value is None:
+                    continue
+
+                # 按列名规则脱敏
+                if col_lower in self._data_masking_rules:
+                    rule = self._data_masking_rules[col_lower]
+                    pattern = rule.get("pattern", "mask_middle")
+                    str_value = str(value)
+                    row[col] = self._apply_pattern(str_value, pattern)
+                    masked_columns.add(col)
+
+                # 旧版按列名匹配（兼容）
+                elif col_lower in ("phone_number", "phone", "mobile"):
+                    row[col] = self.mask_phone(str(value)) if value else value
+                    masked_columns.add(col)
+                elif col_lower == "email":
+                    row[col] = self.mask_email(str(value)) if value else value
+                    masked_columns.add(col)
+                elif col_lower == "iccid":
+                    row[col] = self.mask_iccid(str(value)) if value else value
+                    masked_columns.add(col)
+                elif col_lower == "imsi":
+                    row[col] = self.mask_imsi(str(value)) if value else value
+                    masked_columns.add(col)
+                elif col_lower == "activation_code":
+                    row[col] = self.mask_generic(str(value)) if value else value
                     masked_columns.add(col)
 
                 # 按内容检测（对字符串列）
-                elif isinstance(row[col], str) and len(row[col]) > 5:
-                    original = row[col]
+                elif isinstance(value, str) and len(value) > 5:
+                    original = value
                     masked = self.mask_content(original)
                     if masked != original:
                         row[col] = masked
                         masked_columns.add(col)
 
         return data, list(masked_columns)
+
+    def _is_role_exempt(self, role: str) -> bool:
+        """检查角色是否豁免脱敏"""
+        policy = self._role_policy.get(role, "sensitive")
+        return policy == "none"
+
+    def _apply_pattern(self, value: str, pattern: str) -> str:
+        """根据脱敏模式应用脱敏
+
+        Args:
+            value: 原始值
+            pattern: 脱敏模式 (mask_middle / mask_all_except_last4 / mask_all / mask_email)
+
+        Returns:
+            str: 脱敏后的值
+        """
+        if not value:
+            return value
+
+        if pattern == "mask_middle":
+            # 138****5678
+            if len(value) <= 7:
+                return self.mask_generic(value)
+            return value[:3] + "****" + value[-4:]
+
+        elif pattern == "mask_all_except_last4":
+            # ************1234
+            if len(value) <= 4:
+                return "*" * len(value)
+            return "*" * (len(value) - 4) + value[-4:]
+
+        elif pattern == "mask_all":
+            # ****
+            return "*" * min(len(value), 20)
+
+        elif pattern == "mask_email":
+            # z***@example.com
+            return self.mask_email(value)
+
+        else:
+            return self.mask_generic(value)
 
     def mask_sql_text(self, sql: str) -> str:
         """对 SQL 语句中的敏感信息脱敏（用于日志输出）"""
