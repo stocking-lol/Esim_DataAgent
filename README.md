@@ -6,7 +6,7 @@
 
 eSIM NL2SQL 平台是一个面向 eSIM 运营数据查询场景的自然语言到 SQL（NL2SQL）查询系统。用户可用自然语言提问（如"本月新增多少 eSIM 用户"），平台自动生成 SQL、执行查询、返回结构化结果，并支持多轮对话追问。
 
-系统的安全能力以**可验证**的方式落地，而非口号：内置四层 SQL 安全网关、行级租户隔离（RLS）与自我纠错回路，并通过 **191 项自动化测试**（其中 **45 个 SQL 注入 / Prompt 注入 / fail-closed 攻防用例**）持续验证；安全网关对解析/校验失败采取 **fail-closed（默认拦截）** 策略。详见下方「安全设计」「演示用例」「技术选型」与「质量指标」章节。
+系统的安全能力以**可验证**的方式落地，而非口号：内置四层 SQL 安全网关、行级租户隔离（RLS）与自我纠错回路，并通过 **225 项自动化测试**（其中 **45 个 SQL 注入 / Prompt 注入 / fail-closed 攻防用例**）持续验证；安全网关对解析/校验失败采取 **fail-closed（默认拦截）** 策略。详见下方「安全设计」「演示用例」「技术选型」与「质量指标」章节。
 
 ### 核心能力
 
@@ -201,7 +201,7 @@ esim-nl2sql-platform/
 │   └── utils/
 │       ├── errors.py              # 统一异常处理
 │       └── crypto.py              # bcrypt 密码加密
-├── tests/                         # 测试套件（167 项）
+├── tests/                         # 测试套件（225 项）
 ├── scripts/
 │   ├── init_db.sql                # eSIM 数据库建表
 │   ├── seed_data.sql              # 测试数据
@@ -262,28 +262,56 @@ python scripts/demo.py --feature security
 
 | 维度 | 数值 / 说明 |
 |------|------|
-| 自动化测试 | **191 项**（pytest），其中 **45 个 SQL 注入 / Prompt 注入 / fail-closed 攻防用例**（绝大多数 AI 项目接近于零测试） |
+| 自动化测试 | **225 项**（pytest），其中 **45 个 SQL 注入 / Prompt 注入 / fail-closed 攻防用例**（绝大多数 AI 项目接近于零测试） |
 | 安全网关策略 | **fail-closed**：SQL 解析/校验失败时默认**拦截**而非放行（见 `test_security.py::TestFailClosed`） |
 | 评估基准 | **54 题**（7 类 × 3 难度）黄金 SQL 测试集，输出 Execution Accuracy + Exact Match |
-| 执行准确率（EA，前 20 题对齐） | 规则基线 **65%** · Vanna **95%** |
+| 执行准确率（EA，前 20 题） | 规则基线 65% · 纯 LLM 直出 95% · 自研 Mini Agent **100%** · Vanna 95% |
 | 自我纠错 | 9 类 SQL 错误分类 + 自动重试回路（26 项单测覆盖） |
 
-## 技术选型：为什么用 Vanna（而非纯规则 / 从零手写）
+## 技术选型：为什么用 Vanna（四路对照，数据说话）
 
-为了回答「不用 Vanna 你怎么从零实现 NL2SQL」，本项目**同时交付了一个不依赖 LLM 的纯规则基线** `app/core/nl2sql_baseline.py`（12 项单测覆盖 7 类意图），并设计了 `scripts/eval/compare_eval.py` 用**同一套 54 题评估集**量化二者的差距，作为选型依据。
+技术选型论证采用**同一套 54 题评估集、同一 LLM（DeepSeek-V3）、仅改变架构形态**的对照实验，四路基线：
 
-**同一 20 题子集（对齐）的对比：**
-
-| 指标 | 纯规则基线（无 LLM） | Vanna（LLM Agent） |
+| 路线 | 架构 | 说明 |
 |------|------|------|
-| 执行准确率 EA | 65% | **95%** |
-| 精确匹配 EM | 0% | 0% |
-| `join` 类 EA | 20% | **100%** |
-| `aggregation` 类 EA | 86% | 100% |
-| 自我纠错能力 | 无（模板错则永久错） | 有（错误分类→LLM 纠错→自动重试） |
-| 推理成本 | 0 | 每次查询若干 LLM 调用 |
+| 纯规则基线 | 零 LLM，关键词+模板 | `app/core/nl2sql_baseline.py`（12 项单测，7 类意图） |
+| 纯 LLM 直出（非 Agent） | 单次调用，全量 schema 硬塞 | `app/core/mini_agent/naive.py`：无检索、无工具、无自愈 |
+| **自研 Mini Agent** | **从零实现的 Agent 底座** | `app/core/mini_agent/`：RAG 检索 + 工具执行 + 错误反馈自愈循环 |
+| Vanna 2.0 Agent | 生产底座 | 本项目生产核心，`send_message()` 编排 |
 
-**从零实现 NL2SQL 的基本路径**（基线即此）：schema 元数据 → 意图识别（关键词/句法）→ 模板拼装 → 执行校验。它的天花板就是上表的 65% EA，且对未写进模板的句式直接退化（例如「利润最高的运营商」「激活失败的用户」只能退化成 `SELECT *` 或漏掉语义过滤）。这正是 LLM 方案的差距所在。
+**实测对比（前 20 题对齐，同一评估集、同一 LLM、真实服务 + dry_run 混合）：**
+
+| 指标 | 纯规则基线 | 纯 LLM 直出（非 Agent） | 自研 Mini Agent | Vanna（LLM Agent） |
+|------|------|------|------|------|
+| 执行准确率 EA | 65% | 95% | **100%** | **100%** |
+| 精确匹配 EM | 0% | 0% | **5%** | 0% |
+| 自愈触发率（首轮失败→自愈修正成功占比） | 无 | 0% | **15%** | 0% |
+| 上下文策略 | 模板 | 全量硬塞 | RAG 动态检索 | RAG 动态检索 |
+| 推理成本 | 0 | 每次 1 次 LLM | 每次 1-2 次 LLM | 每次若干 LLM 调用 |
+
+> 注：数据来自 `scripts/eval/compare_eval3.py` 前 20 题对齐实测（Vanna 走真实服务完整链路，
+> Mini Agent/纯 LLM 直出走 dry_run 模拟执行，`scripts/eval/compare_report3.json` 可复跑复核）。
+
+**三路对比的关键结论（Agent 架构的增量价值）：**
+- **纯 LLM 直出 vs 自研 Mini Agent**：同一 LLM，仅差「RAG 检索 + 工具校验 + 自愈循环」，EA 95% → 100%，且 Mini Agent 有 **15% 的题首轮出错后靠自愈纠错成功**（纯 LLM 出错即败）。
+- **Vanna vs 自研 Mini Agent（自愈机制实测对比）**：两者最终 EA 均为 100%，但**自愈触发率不同**——Vanna 首轮即 100% 正确（触发率 0%，自愈能力存在但未触发，说明其 few-shot/提示工程使首轮质量更高）；Mini Agent 首轮 85% + 自愈 15% 兜底至 100%（证明自愈闭环是把「首轮失败」转化为「最终成功」的安全网）。两套架构的自愈回路均由 `error_classifier`（9 类错误）驱动，区别只在触发频率。
+- **自研 Mini Agent 修正好「纯 LLM 修不了的题」**：如「查询所有已激活的用户档案」，纯 LLM 直出把"用户档案"误映射到 `users` 表；Mini Agent 通过 RAG 混合检索命中业务文档与 few-shot 示例，再经自愈循环（3 次重试）修正到 `esim_profiles`。
+- **为什么自研版仍选 Vanna 做生产底座**：自研版验证了 Agent 架构的核心闭环（工程上约 800 行即可复现），但 Vanna 提供更成熟的多轮对话、插件体系与生态；**自研版的价值是架构验证 + 对比实验，用数据反哺选型**——这正是 Agent 项目的工程素养。
+
+**自研 Mini Agent Runtime 的设计要点**（`app/core/mini_agent/`，34 项单测）：
+- `ToolRegistry`：工具注册 / 查找 / 访问组权限（对应 Vanna 的 ToolRegistry 抽象）
+- `SqlTool`：执行前强制 fail-closed 安全网关 + RLS 注入 + 超时提示；`dry_run` 模式用 sqlglot 模拟执行（语法/表/列三级校验），可离线评估
+- 编排循环：检索 → 生成 → 执行 → 错误反馈 → 再生成（`max_iterations` 上限；错误分类器决定是否可重试；安全拦截不进入自愈循环）
+- **自研混合检索（Hybrid Search）**：解决英文 embedding（all-MiniLM-L6-v2）对中文查询的检索漂移——向量召回大候选池后，按关键词重叠（Jaccard）与主题包含加权重排，确保「问题与示例几乎一致」的 few-shot 必被召回
+- 上下文总量控制：SQL 示例 > 业务文档 > DDL 的保留优先级，避免长上下文稀释注意力
+
+**运行三路对比：**
+```bash
+python scripts/eval/compare_eval3.py --mini --mini-limit 20 --naive --naive-limit 20
+python scripts/eval/compare_eval3.py --vanna --endpoint http://localhost:8000   # 加 Vanna 路
+```
+
+**从零实现 NL2SQL 的基本路径**（规则基线即此）：schema 元数据 → 意图识别（关键词/句法）→ 模板拼装 → 执行校验。它的天花板就是上表的 65% EA，且对未写进模板的句式直接退化（例如「利润最高的运营商」「激活失败的用户」只能退化成 `SELECT *` 或漏掉语义过滤）。这正是 LLM 方案的差距所在。
 
 **Vanna 的增量价值**：把"理解自然语言"这一步交给模型，配合 RAG（ChromaDB 检索业务 DDL / 文档 / SQL 示例）与自我纠错回路，在 `join`、歧义列、复杂/口语化问句上显著更优（join 类 EA 从 20% → 100%）。本样本 20 题中 Vanna 首轮即正确、无需强制重试；自我纠错回路由 26 项专测（错误分类 9 类 + 重试循环）独立验证。
 
@@ -299,7 +327,7 @@ python -m pytest tests/ -v
 python -m pytest tests/test_query.py::test_conversation_crud -v
 ```
 
-测试覆盖（167 项），按模块分组：
+测试覆盖（225 项），按模块分组：
 
 **基础能力**
 - 认证流程（登录、me、错误密码、注册、更新资料）

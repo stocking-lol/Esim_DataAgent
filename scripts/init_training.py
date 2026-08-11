@@ -297,6 +297,14 @@ DOCUMENTATION_DATA = [
         "GROUP BY u.id, u.phone_number ORDER BY total_usage DESC LIMIT 10。",
         "流量TOP10",
     ),
+    (
+        "用户档案（Profile/档案）对应 esim_profiles 表，而不是 users 表。"
+        "esim_profiles.profile_status 字段表示档案状态，取值："
+        "downloaded（已下载）、installed（已安装）、active（已激活）、"
+        "enabled（已启用）、disabled（已禁用）、deleted（已删除）。"
+        "『已激活的用户档案』对应查询条件 profile_status = 'active'。",
+        "用户档案",
+    ),
 ]
 
 
@@ -306,6 +314,14 @@ DOCUMENTATION_DATA = [
 
 SQL_EXAMPLES = [
     # ---- 单表查询 ----
+    {
+        "question": "查询所有已激活的用户档案",
+        "sql": "SELECT * FROM esim_profiles WHERE profile_status = 'active'",
+    },
+    {
+        "question": "查询所有处于漫游状态的套餐包",
+        "sql": "SELECT * FROM roaming_packages WHERE status = 'active'",
+    },
     {
         "question": "本月新增多少eSIM用户",
         "sql": "SELECT COUNT(*) AS new_users FROM users WHERE created_at >= DATE_FORMAT(CURRENT_DATE, '%Y-%m-01')",

@@ -2,6 +2,22 @@
 
 本文档记录 eSIM NL2SQL Platform 的版本演进，遵循 [Keep a Changelog](https://keepachangelog.com/) 约定，版本号采用语义化版本 (SemVer)。
 
+## [Unreleased] - 2026-08-12
+
+### 新增 (Added)
+- **自研 Mini Agent Runtime** — `app/core/mini_agent/`（约 800 行，34 项单测）：参考 Vanna 抽象思想、不依赖 Vanna 从零实现的轻量 Agent 底座，含 `ToolRegistry`（工具注册/访问组权限）、`SqlTool`（fail-closed 安全网关 + RLS + 超时；`dry_run` 用 sqlglot 模拟执行三级校验，可离线评估）、编排循环（检索→生成→执行→错误反馈→再生成，`max_iterations` 上限 + 错误分类决定是否重试 + 安全拦截不进入自愈）、对话记忆。
+- **自研混合检索（Hybrid Search）** — `app/core/mini_agent/rag.py`：解决英文 embedding（all-MiniLM-L6-v2）对中文查询的检索漂移——向量召回大候选池后按关键词重叠（Jaccard）与主题包含加权重排，并做上下文总量控制（SQL 示例 > 文档 > DDL 的保留优先级）。
+- **纯 LLM 直出对照组** — `app/core/mini_agent/naive.py`：单次调用、全量 schema 硬塞、无检索/无工具/无自愈，作为「非 Agent」对照基线。
+- **三路对比评估** — `scripts/eval/compare_eval3.py`：同一 54 题评估集、同一 LLM（DeepSeek-V3）、仅改架构形态，对比「纯 LLM 直出 / 自研 Mini Agent / Vanna」。
+- **训练数据扩充** — `scripts/init_training.py`：新增「用户档案→esim_profiles」「漫游套餐包→roaming_packages」映射文档与 SQL 示例（43 → 46 条）。
+
+### 变更 (Changed)
+- 测试套件从 **191 项**扩展至 **225 项**（新增 mini_agent 34 项），全部通过。
+- README「技术选型」章节升级为四路对照（纯规则基线 / 纯 LLM 直出 / 自研 Mini Agent / Vanna），前 20 题对齐实测：EA 65% → 95% → **100%** → **100%**；自愈触发率 无 → 0% → **15%** → 0%（Vanna 首轮全对未触发，自愈能力存在；Mini Agent 首轮 85% + 自愈 15% 兜底至 100%）。数据见 `scripts/eval/compare_report3.json`。
+- **LLM 重试退避加抖动（Full Jitter）** — `app/core/llm.py`：原纯指数退避（2s/4s 固定）在高并发下会导致所有超时请求**同一时刻**同步重试，形成重试风暴（thundering herd）冲击下游 API。改为 `delay = uniform(0, min(cap, base·2^(attempt-1)))`（AWS 推荐 Full Jitter），并设上限 `RETRY_MAX_DELAY=60s`、随机源可注入。模拟验证：100 个并发失败请求，最拥挤时刻从 100 个降到 3 个。新增 `tests/test_llm_backoff.py`（8 项，233 项总计）。
+- **生产路径 LLM 重连（ResilientOpenAILlmService）** — `app/core/vanna_instance.py`：系统级断连演练发现核心 SQL 生成路径（Vanna Agent 流式调用）的 LLM 调用**无任何重试**，连接错误一次即败。新增 `ResilientOpenAILlmService(OpenAILlmService)` 包装 Vanna 的 LLM 服务，在建立流/非流式调用处复用 jittered 退避重连（APIConnectionError/RateLimitError 重试，其余错误不重试），流处理逻辑与父类一致。实测断连日志：`attempt 1/3 → retry in 0.09s (jittered) → attempt 2/3 → retry in 3.11s (jittered) → failed after 3 attempts`。新增 `tests/test_vanna_llm_resilience.py`（4 项，237 项总计）。
+- **重试决策矩阵明确化（可重试 vs 需人工介入）** — `app/core/llm.py`：补上"非超时连接错误（连接被拒绝/DNS 失败）也纳入抖动重试"的漏网点（此前被误归为 API 错误不重试）；API 错误（4xx/5xx，如 API Key 无效、参数错误、配额不足）**一律不重试**，带完整错误信息抛出并提示人工检查配置。系统级验证：改坏 API Key（401）→ 0 次重试、2.07s 快速失败、日志完整留痕；断连（ConnectError）→ 3 次 jittered 重试、9.8s。新增 `tests/test_llm_backoff.py` 2 项（连接拒绝重试 + API 错误信息引导人工介入），239 项总计。
+
 ## [0.7.0] - 2026-08-06
 
 ### 新增 (Added)

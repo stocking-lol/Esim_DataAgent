@@ -5,10 +5,10 @@ Vanna 2.0 Agent 配置与初始化
 Vanna 2.0 采用 Agent-based 架构，通过 send_message() 处理自然语言查询。
 """
 
+import asyncio
 import logging
-from typing import Optional
-
-from typing import Any
+import random
+from typing import Any, AsyncGenerator, Dict, Optional
 
 from vanna import Agent, AgentConfig, ToolRegistry
 from vanna.core.tool import ToolContext, ToolResult
@@ -19,10 +19,143 @@ from vanna.integrations.local.agent_memory.in_memory import DemoAgentMemory
 from vanna.tools import RunSqlTool
 from vanna.tools.run_sql import RunSqlToolArgs
 
+from openai import APIConnectionError, RateLimitError
+
 from app.config.settings import settings
 from app.core.chroma_store import chroma_store, ChromaTrainingStore
+from app.core.llm import MAX_RETRIES, compute_backoff_delay
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================
+# 带 jittered 重连的 LLM 服务（包装 Vanna 的 OpenAILlmService）
+# ============================================================
+
+class ResilientOpenAILlmService(OpenAILlmService):
+    """包装 Vanna OpenAILlmService：为 LLM 调用加入「指数退避 + 全抖动」重连
+
+    背景：
+      生产核心路径（Agent 流式生成 SQL）直接使用 Vanna 的 OpenAILlmService，
+      其内部 LLM 调用**没有重试**——连接错误（如网络抖动、API 瞬时不可达）
+      会直接抛出，导致整条查询失败。自研 LLMService 的抖动重试只覆盖了
+      辅助路径（摘要/纠错），未覆盖 Agent 生成路径。
+
+    本类重写 stream_request / send_request，把 openai 调用包进与
+    app.core.llm.compute_backoff_delay 一致的 jittered 重试循环：
+      - 瞬态错误（APIConnectionError：连接失败/超时；RateLimitError：限流）→ 重试
+      - 其他错误（4xx/5xx、鉴权失败）→ 直接抛出，不浪费调用
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._random = random
+
+    async def _retry_call(self, fn):
+        """对 openai 调用做 jittered 重试（连接/限流类瞬态错误）
+
+        fn 可返回普通值或 awaitable（同步/异步调用均可重试）。
+        """
+        import inspect
+        last_error = None
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                result = fn()
+                if inspect.isawaitable(result):
+                    result = await result
+                return result
+            except (APIConnectionError, RateLimitError) as e:
+                last_error = e
+                if attempt >= MAX_RETRIES:
+                    break
+                delay = compute_backoff_delay(attempt, rng=self._random)
+                logger.warning(
+                    "LLM call attempt %d/%d failed (%s: %.80s), retrying in %.2fs (jittered)...",
+                    attempt, MAX_RETRIES, type(e).__name__, str(e)[:80], delay,
+                )
+                await asyncio.sleep(delay)
+        logger.error("LLM call failed after %d attempts: %s", MAX_RETRIES, last_error)
+        raise last_error
+
+    async def send_request(self, request) -> Any:
+        """非流式请求：整体重试（幂等，payload 相同响应相同）"""
+        parent = OpenAILlmService.send_request  # 显式父类方法（lambda 内 zero-arg super 不可用）
+        return await self._retry_call(lambda: parent(self, request))
+
+    async def stream_request(self, request) -> AsyncGenerator[Any, None]:
+        """流式请求：仅在「建立流」阶段重试（连接错误发生在 create 时）
+
+        流一旦建立并开始迭代，中途错误无法重放，直接向上一层抛出。
+        流的处理逻辑与父类 OpenAILlmService.stream_request 保持一致
+        （工具调用累积、终结 chunk 等），仅替换 create 建立流部分。
+        """
+        import json
+
+        from vanna.core.llm import LlmStreamChunk
+        from vanna.core.llm.models import ToolCall
+
+        payload = self._build_payload(request)
+
+        # 建立流（连接/限流错误在此处 jittered 重试）
+        stream = await self._retry_call(
+            lambda: self._client.chat.completions.create(**payload, stream=True))
+
+        # 以下与父类逻辑一致：流式文本 + 工具调用累积
+        tc_builders: Dict[int, Dict[str, Optional[str]]] = {}
+        last_finish: Optional[str] = None
+
+        for event in stream:
+            if not getattr(event, "choices", None):
+                continue
+            choice = event.choices[0]
+            delta = getattr(choice, "delta", None)
+            if delta is None:
+                last_finish = getattr(choice, "finish_reason", last_finish)
+                continue
+
+            content_piece: Optional[str] = getattr(delta, "content", None)
+            if content_piece:
+                yield LlmStreamChunk(content=content_piece)
+
+            streamed_tool_calls = getattr(delta, "tool_calls", None)
+            if streamed_tool_calls:
+                for tc in streamed_tool_calls:
+                    idx = getattr(tc, "index", 0) or 0
+                    b = tc_builders.setdefault(
+                        idx, {"id": None, "name": None, "arguments": ""})
+                    if getattr(tc, "id", None):
+                        b["id"] = tc.id
+                    fn = getattr(tc, "function", None)
+                    if fn is not None:
+                        if getattr(fn, "name", None):
+                            b["name"] = fn.name
+                        if getattr(fn, "arguments", None):
+                            b["arguments"] = (b["arguments"] or "") + fn.arguments
+
+            last_finish = getattr(choice, "finish_reason", last_finish)
+
+        # 终结 chunk（工具调用或完成信号）——与父类一致
+        final_tool_calls = []
+        for b in tc_builders.values():
+            if not b.get("name"):
+                continue
+            args_raw = b.get("arguments") or "{}"
+            try:
+                loaded = json.loads(args_raw)
+                args_dict = loaded if isinstance(loaded, dict) else {"args": loaded}
+            except Exception:
+                args_dict = {"_raw": args_raw}
+            final_tool_calls.append(
+                ToolCall(
+                    id=b.get("id") or "tool_call",
+                    name=b["name"] or "tool",
+                    arguments=args_dict,
+                )
+            )
+        if final_tool_calls:
+            yield LlmStreamChunk(tool_calls=final_tool_calls, finish_reason=last_finish)
+        else:
+            yield LlmStreamChunk(finish_reason=last_finish or "stop")
 
 
 # --- 自定义 RunSqlTool（捕获生成的 SQL） ---
@@ -232,7 +365,9 @@ class VannaAgentManager:
 
         try:
             # 1. 配置 LLM 服务 (DeepSeek-V3 via OpenAI 兼容接口)
-            llm_service = OpenAILlmService(
+            #    使用 ResilientOpenAILlmService：为 Agent 生成路径加入
+            #    指数退避 + 全抖动重连（连接/限流错误自动重试）
+            llm_service = ResilientOpenAILlmService(
                 model=settings.LLM_MODEL,
                 api_key=settings.LLM_API_KEY,
                 base_url=settings.LLM_BASE_URL,

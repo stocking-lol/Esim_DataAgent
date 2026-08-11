@@ -5,12 +5,20 @@ LLM 服务封装
 使用 DeepSeek-V3 作为默认模型。
 """
 
+import asyncio
 import json
 import logging
+import random
 import time
 from typing import Any, Optional
 
-from openai import AsyncOpenAI, APIError, RateLimitError, APITimeoutError
+from openai import (
+    APIConnectionError,
+    APIError,
+    AsyncOpenAI,
+    RateLimitError,
+    APITimeoutError,
+)
 
 from app.config.settings import settings
 
@@ -20,6 +28,28 @@ logger = logging.getLogger(__name__)
 MAX_RETRIES = 3
 # 重试间隔基数（秒）
 RETRY_BASE_DELAY = 2.0
+# 重试间隔上限（秒）——防止指数退避无限增长
+RETRY_MAX_DELAY = 60.0
+
+
+def compute_backoff_delay(attempt: int, rng=None) -> float:
+    """指数退避 + 全抖动（Full Jitter），返回本次重试的等待秒数
+
+    高并发下若所有请求同时超时/限流，纯指数退避会让它们在「同一时刻」
+    一起重试，形成重试风暴（thundering herd）冲击下游 API。加入随机抖动后，
+    每个请求的重试时机在 [0, cap] 内均匀散开。
+
+    delay = uniform(0, min(cap, base·2^(attempt-1)))
+
+    Args:
+        attempt: 当前第几次尝试（从 1 开始）
+        rng: 随机源（可注入固定种子便于测试；默认 random 模块）
+
+    Returns:
+        [0, cap] 内的随机等待秒数，cap 随 attempt 指数增长并封顶 RETRY_MAX_DELAY
+    """
+    cap = min(RETRY_MAX_DELAY, RETRY_BASE_DELAY * (2 ** (attempt - 1)))
+    return (rng or random).uniform(0, cap)
 
 # DeepSeek 推荐的 SQL 生成 system prompt
 SQL_GENERATION_SYSTEM_PROMPT = """你是一个专业的 SQL 查询生成助手。你需要根据用户的问题、数据库表结构(DDL)、业务文档和SQL示例，
@@ -56,8 +86,10 @@ SQL_CORRECT_SYSTEM_PROMPT = """你是一个 SQL 调试助手。以下是生成 S
 class LLMService:
     """LLM 服务封装，支持 DeepSeek-V3 / OpenAI 兼容接口"""
 
-    def __init__(self) -> None:
+    def __init__(self, random_source=None) -> None:
         self._client: Optional[AsyncOpenAI] = None
+        # 随机源可注入（测试用固定种子可复现抖动；默认用 random 模块）
+        self._random = random_source or random
 
     @property
     def client(self) -> AsyncOpenAI:
@@ -69,6 +101,27 @@ class LLMService:
                 timeout=settings.LLM_TIMEOUT_SECONDS,
             )
         return self._client
+
+    def _backoff_delay(self, attempt: int) -> float:
+        """指数退避 + 全抖动（Full Jitter），返回本次重试的等待秒数
+
+        背景（面试/架构要点）：
+          高并发下若所有请求同时超时/限流，纯指数退避会让它们在
+          「同一时刻」一起重试，形成重试风暴（thundering herd），
+          给下游 LLM API 造成二次压力尖峰。
+
+        解法（AWS Exponential Backoff and Jitter 推荐）：
+          delay = uniform(0, min(cap, base * 2^(attempt-1)))
+          —— 每个请求的重试时机在 [0, cap] 内均匀随机散开，
+             既保留指数退避的增长趋势，又避免同步重试。
+
+        Args:
+            attempt: 当前是第几次尝试（从 1 开始）
+
+        Returns:
+            随机化后的等待秒数，位于 [0, cap]，cap 随尝试次数指数增长并封顶
+        """
+        return compute_backoff_delay(attempt, rng=self._random)
 
     async def _call_llm(
         self,
@@ -126,23 +179,32 @@ class LLMService:
 
                 return content.strip()
 
-            except (APITimeoutError, RateLimitError) as e:
+            # ── 可重试（瞬态）：连接超时 / 连接失败（断开）/ 限流 ──
+            # APIConnectionError 覆盖超时（APITimeoutError）与连接被拒绝/
+            # DNS 失败（ConnectError）——均属瞬态网络故障，抖动退避重试。
+            # 注意：非超时的连接失败同样必须重试，不能落入下方 APIError 分支。
+            except (APIConnectionError, RateLimitError) as e:
                 last_error = e
-                delay = RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                delay = self._backoff_delay(attempt)
                 logger.warning(
-                    "LLM call attempt %d failed (%s), retrying in %.1fs...",
+                    "LLM call attempt %d failed (%s), retrying in %.2fs (jittered)...",
                     attempt, type(e).__name__, delay,
                 )
                 if attempt < MAX_RETRIES:
-                    import asyncio
                     await asyncio.sleep(delay)
                 else:
-                    raise LLMException(f"LLM 调用超时或限流: {e}") from e
+                    raise LLMException(f"LLM 调用超时/连接失败/限流（已重试{MAX_RETRIES}次）: {e}") from e
 
+            # ── 不可重试（需人工介入）：4xx/5xx API 错误 ──
+            # 认证失败、参数错误、模型不存在、配额不足等——重试无意义，
+            # 必须带完整错误信息抛出，由人工检查配置/账单后修复。
             except APIError as e:
                 last_error = e
-                logger.error("LLM API error: %s", e)
-                raise LLMException(f"LLM API 错误: {e}") from e
+                logger.error(
+                    "LLM API error (NOT retried, human intervention required): %s", e)
+                raise LLMException(
+                    f"LLM API 错误（不可自动恢复，请人工检查 API Key/模型名/配额）: {e}"
+                ) from e
 
         raise LLMException(f"LLM 调用失败（已重试{MAX_RETRIES}次）: {last_error}")
 
