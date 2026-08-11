@@ -25,6 +25,35 @@ logger = logging.getLogger(__name__)
 _SECURITY_YAML = Path(__file__).resolve().parent.parent / "config" / "security.yaml"
 
 
+def _strip_sql_comments(sql: str) -> str:
+    """剥离 SQL 中的注释（/*...*/、-- 行注释、# 行注释）
+
+    用途：MySQL 会忽略关键字之间的注释（如 DRO/**/P TABLE 等价于 DROP TABLE），
+    解析失败走正则兜底时若直接匹配原始 SQL，攻击者可用注释拆分危险关键字绕过
+    正则检测。剥离注释后再检查，才能命中 DROP/DELETE 等危险操作。
+
+    块注释处理遵循 MySQL 词法行为：
+      - 注释两侧都是单词字符（字母/数字/下划线）→ **直接拼接**（DRO/**/P -> DROP），
+        因为 MySQL 会把关键字内部的注释当作连续 token；
+      - 否则 → 替换为空格（DROP /*注释*/ TABLE -> DROP  TABLE）。
+
+    注意：字符串字面量内的 '--'/'#' 也会被剥离——仅影响正则匹配文本，
+    方向是更保守（不会导致危险操作漏网）。
+    """
+
+    def _block_repl(m: "re.Match") -> str:
+        before = sql[: m.start()].rstrip()[-1:] if m.start() > 0 else ""
+        after = sql[m.end():].lstrip()[:1] if m.end() < len(sql) else ""
+        if (before.isalnum() or before == "_") and (after.isalnum() or after == "_"):
+            return ""   # 关键字/标识符内部注释：拼接（DRO/**/P -> DROP）
+        return " "
+
+    s = re.sub(r"/\*.*?\*/", _block_repl, sql, flags=re.DOTALL)
+    s = re.sub(r"(?m)--.*?$", " ", s)
+    s = re.sub(r"(?m)#.*?$", " ", s)
+    return s
+
+
 @dataclass
 class SecurityCheckResult:
     """安全检查结果"""
@@ -78,10 +107,14 @@ class SQLSecurityGateway:
         r"(?i)override\s+(system|safety|security)\s+(rule|prompt|instruction)",
         r"(?i)忽略(之前|前面|上面|所有)(的)?(指令|提示|规则|设定)",
         r"(?i) disregard (以上|之前|前面)",
-        r"(?i)你(现在|从现在起)?(是|扮演)(管理员|DBA|root|系统|超级用户)",
+        r"(?i)你(现在|从现在起)?(是|扮演)(管理员|DBA|root|系统|超级用户|数据库管理员)",
         r"(?i)忘记(之前|前面|所有)(的)?(指令|设定|规则)",
         r"(?i)新指令[:：]",
         r"(?i)覆盖(系统|安全)(规则|设定)",
+        # 方括号/括号包裹的系统指令前缀，如 [SYSTEM] 执行 ...、【指令】...
+        r"(?i)(\[|【)\s*(system|指令|instruction|user)\s*(]|】)",
+        # 伪装成系统/调试指令的提示词
+        r"(?i)(execute|执行)\s+(delete|drop|truncate|update|insert|grant)\b",
     ]
 
     # 可疑字符组合
@@ -381,7 +414,11 @@ class SQLSecurityGateway:
         原则：无法用 AST 验证时，**默认拦截**，但允许一条"仅触及白名单表且
         不含危险构造"的 SQL 通过（正则第二道校验）。任何无法确认的情形都拦。
         """
-        sql_lower = sql.lower()
+        # ── 剥离注释后再检查（防关键字拆分绕过）──
+        # MySQL 忽略关键字之间的注释（DRO/**/P TABLE == DROP TABLE），
+        # 直接匹配原始 SQL 会被注释拆分绕过；剥离后 DRO/**/P -> DROP 方能命中。
+        sql_no_comment = _strip_sql_comments(sql)
+        sql_lower = sql_no_comment.lower()
         schema_cfg = self.sql_security_config.get("schema_limiter", {})
 
         # 危险关键词（与 AST 校验保持一致）
@@ -391,7 +428,7 @@ class SQLSecurityGateway:
             "INTO OUTFILE", "INTO DUMPFILE", "CALL", "EXEC", "EXECUTE",
         ]
         for kw in dangerous_keywords:
-            if re.search(r'\b' + re.escape(kw) + r'\b', sql, re.IGNORECASE):
+            if re.search(r'\b' + re.escape(kw) + r'\b', sql_no_comment, re.IGNORECASE):
                 return SecurityCheckResult(
                     passed=False, layer="schema_limiter",
                     reason=f"SQL 包含禁止操作: {kw}（解析失败兜底拦截）",
@@ -399,20 +436,20 @@ class SQLSecurityGateway:
 
         # 危险函数
         for fn in ("sleep", "benchmark", "load_file"):
-            if re.search(r'\b' + fn + r'\s*\(', sql, re.IGNORECASE):
+            if re.search(r'\b' + fn + r'\s*\(', sql_no_comment, re.IGNORECASE):
                 return SecurityCheckResult(
                     passed=False, layer="sql_validator",
                     reason=f"禁止使用函数: {fn}（解析失败兜底拦截）",
                 )
 
         # 系统变量
-        if re.search(r'@@\w+', sql, re.IGNORECASE):
+        if re.search(r'@@\w+', sql_no_comment, re.IGNORECASE):
             return SecurityCheckResult(
                 passed=False, layer="sql_validator",
                 reason="禁止访问系统变量 (@@)（解析失败兜底拦截）",
             )
 
-        # 白名单表校验 —— 核心不变量
+        # 白名单表校验 —— 核心不变量（在剥离注释后的 SQL 上提取，避免注释伪装）
         allowed_tables = {t.lower() for t in schema_cfg.get("allowed_tables", [])}
         if allowed_tables:
             found = self._extract_tables_regex(sql_lower)

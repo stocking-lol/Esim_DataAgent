@@ -17,6 +17,7 @@
 - **LLM 重试退避加抖动（Full Jitter）** — `app/core/llm.py`：原纯指数退避（2s/4s 固定）在高并发下会导致所有超时请求**同一时刻**同步重试，形成重试风暴（thundering herd）冲击下游 API。改为 `delay = uniform(0, min(cap, base·2^(attempt-1)))`（AWS 推荐 Full Jitter），并设上限 `RETRY_MAX_DELAY=60s`、随机源可注入。模拟验证：100 个并发失败请求，最拥挤时刻从 100 个降到 3 个。新增 `tests/test_llm_backoff.py`（8 项，233 项总计）。
 - **生产路径 LLM 重连（ResilientOpenAILlmService）** — `app/core/vanna_instance.py`：系统级断连演练发现核心 SQL 生成路径（Vanna Agent 流式调用）的 LLM 调用**无任何重试**，连接错误一次即败。新增 `ResilientOpenAILlmService(OpenAILlmService)` 包装 Vanna 的 LLM 服务，在建立流/非流式调用处复用 jittered 退避重连（APIConnectionError/RateLimitError 重试，其余错误不重试），流处理逻辑与父类一致。实测断连日志：`attempt 1/3 → retry in 0.09s (jittered) → attempt 2/3 → retry in 3.11s (jittered) → failed after 3 attempts`。新增 `tests/test_vanna_llm_resilience.py`（4 项，237 项总计）。
 - **重试决策矩阵明确化（可重试 vs 需人工介入）** — `app/core/llm.py`：补上"非超时连接错误（连接被拒绝/DNS 失败）也纳入抖动重试"的漏网点（此前被误归为 API 错误不重试）；API 错误（4xx/5xx，如 API Key 无效、参数错误、配额不足）**一律不重试**，带完整错误信息抛出并提示人工检查配置。系统级验证：改坏 API Key（401）→ 0 次重试、2.07s 快速失败、日志完整留痕；断连（ConnectError）→ 3 次 jittered 重试、9.8s。新增 `tests/test_llm_backoff.py` 2 项（连接拒绝重试 + API 错误信息引导人工介入），239 项总计。
+- **安全攻防用例扩充至 75 个** — `app/core/sql_security.py`：修复**注释拆分关键字绕过**漏洞（DRO/**/P == DROP，MySQL 会拼接执行——正则兜底按 MySQL 词法剥离注释拼接后命中危险词）；Prompt 注入补强（方括号 [SYSTEM] 指令前缀、角色扮演"数据库管理员"、"执行+危险动词"伪装指令）。`tests/test_security.py` 新增 30 项（危险操作全覆盖 / 库前缀与反引号绕过 / 编码与注释拆分 / CTE 与子查询隐藏 / Prompt 变体 / fail-closed 组合 / 结果检查层），239 → 269 项总计。
 
 ## [0.7.0] - 2026-08-06
 

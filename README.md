@@ -6,7 +6,7 @@
 
 eSIM NL2SQL 平台是一个面向 eSIM 运营数据查询场景的自然语言到 SQL（NL2SQL）查询系统。用户可用自然语言提问（如"本月新增多少 eSIM 用户"），平台自动生成 SQL、执行查询、返回结构化结果，并支持多轮对话追问。
 
-系统的安全能力以**可验证**的方式落地，而非口号：内置四层 SQL 安全网关、行级租户隔离（RLS）与自我纠错回路，并通过 **225 项自动化测试**（其中 **45 个 SQL 注入 / Prompt 注入 / fail-closed 攻防用例**）持续验证；安全网关对解析/校验失败采取 **fail-closed（默认拦截）** 策略。详见下方「安全设计」「演示用例」「技术选型」与「质量指标」章节。
+系统的安全能力以**可验证**的方式落地，而非口号：内置四层 SQL 安全网关、行级租户隔离（RLS）与自我纠错回路，并通过 **269 项自动化测试**（其中 **75 个 SQL 注入 / Prompt 注入 / fail-closed 攻防用例**）持续验证；安全网关对解析/校验失败采取 **fail-closed（默认拦截）** 策略。详见下方「安全设计」「演示用例」「技术选型」与「质量指标」章节。
 
 ### 核心能力
 
@@ -201,7 +201,7 @@ esim-nl2sql-platform/
 │   └── utils/
 │       ├── errors.py              # 统一异常处理
 │       └── crypto.py              # bcrypt 密码加密
-├── tests/                         # 测试套件（225 项）
+├── tests/                         # 测试套件（269 项）
 ├── scripts/
 │   ├── init_db.sql                # eSIM 数据库建表
 │   ├── seed_data.sql              # 测试数据
@@ -262,7 +262,7 @@ python scripts/demo.py --feature security
 
 | 维度 | 数值 / 说明 |
 |------|------|
-| 自动化测试 | **225 项**（pytest），其中 **45 个 SQL 注入 / Prompt 注入 / fail-closed 攻防用例**（绝大多数 AI 项目接近于零测试） |
+| 自动化测试 | **269 项**（pytest），其中 **75 个 SQL 注入 / Prompt 注入 / fail-closed 攻防用例**（绝大多数 AI 项目接近于零测试） |
 | 安全网关策略 | **fail-closed**：SQL 解析/校验失败时默认**拦截**而非放行（见 `test_security.py::TestFailClosed`） |
 | 评估基准 | **54 题**（7 类 × 3 难度）黄金 SQL 测试集，输出 Execution Accuracy + Exact Match |
 | 执行准确率（EA，前 20 题） | 规则基线 65% · 纯 LLM 直出 95% · 自研 Mini Agent **100%** · Vanna 95% |
@@ -327,7 +327,7 @@ python -m pytest tests/ -v
 python -m pytest tests/test_query.py::test_conversation_crud -v
 ```
 
-测试覆盖（225 项），按模块分组：
+测试覆盖（269 项），按模块分组：
 
 **基础能力**
 - 认证流程（登录、me、错误密码、注册、更新资料）
