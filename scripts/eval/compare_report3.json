@@ -1,7 +1,7 @@
 {
   "meta": {
     "test_set_size": 54,
-    "aligned_subset": 20
+    "trials": 3
   },
   "naive": {
     "rows": [
@@ -11,7 +11,7 @@
         "difficulty": "easy",
         "question": "查询所有 eSIM 套餐的名称和价格",
         "gold_sql": "SELECT plan_name, price FROM plans",
-        "gen_sql": "SELECT p.name AS 套餐名称, p.price AS 价格\nFROM plans p\nWHERE p.type = 'esim'\n  AND p.status = 'active'\nLIMIT 1000",
+        "gen_sql": "SELECT p.name AS 套餐名称, p.price AS 价格\nFROM plans p\nWHERE p.type = 'esim'\nLIMIT 1000",
         "handled": true,
         "exact_match": false,
         "exec_acc": true,
@@ -76,7 +76,7 @@
         "difficulty": "medium",
         "question": "列出价格大于 50 元的套餐",
         "gold_sql": "SELECT * FROM plans WHERE price > 50",
-        "gen_sql": "SELECT id, name, data_volume_mb, voice_minutes, sms_count, price, currency, validity_days, type, status, description\nFROM plans\nWHERE price > 50\nLIMIT 1000",
+        "gen_sql": "SELECT id AS 套餐ID, name AS 套餐名称, data_volume_mb AS 数据流量MB, voice_minutes AS 语音分钟数, sms_count AS 短信条数, price AS 价格, currency AS 货币, validity_days AS 有效期天数, type AS 套餐类型, status AS 状态\nFROM plans\nWHERE price > 50\nLIMIT 1000",
         "handled": true,
         "exact_match": false,
         "exec_acc": true,
@@ -89,7 +89,7 @@
         "difficulty": "medium",
         "question": "查询所有处于漫游状态的套餐包",
         "gold_sql": "SELECT * FROM roaming_packages WHERE status = 'active'",
-        "gen_sql": "SELECT \n    rp.id,\n    rp.name AS 套餐名称,\n    rp.coverage_countries AS 覆盖国家,\n    rp.data_volume_mb AS 数据量MB,\n    rp.price AS 价格,\n    rp.currency AS 货币,\n    rp.validity_days AS 有效期天数,\n    rp.mvno_id AS MVNO_ID,\n    rp.status AS 状态,\n    rp.created_at AS 创建时间\nFROM roaming_packages rp\nWHERE rp.status = 'active'\n  AND rp.coverage_countries IS NOT NULL\n  AND rp.coverage_countries != ''\nLIMIT 1000",
+        "gen_sql": "SELECT \n    rp.id,\n    rp.name AS 套餐名称,\n    rp.coverage_countries AS 覆盖国家,\n    rp.data_volume_mb AS 数据量MB,\n    rp.price AS 价格,\n    rp.currency AS 货币,\n    rp.validity_days AS 有效期天数,\n    rp.mvno_id AS MVNO_ID,\n    rp.status AS 状态\nFROM roaming_packages rp\nWHERE rp.status = 'active'\nLIMIT 1000",
         "handled": true,
         "exact_match": false,
         "exec_acc": true,
@@ -167,7 +167,7 @@
         "difficulty": "medium",
         "question": "统计每种订单状态的订单数量",
         "gold_sql": "SELECT status, COUNT(*) FROM orders GROUP BY status",
-        "gen_sql": "SELECT status AS 订单状态, COUNT(*) AS 订单数量\nFROM orders\nGROUP BY status\nORDER BY 订单数量 DESC",
+        "gen_sql": "SELECT status AS 订单状态, COUNT(*) AS 订单数量\nFROM orders\nGROUP BY status\nORDER BY 订单数量 DESC\nLIMIT 1000",
         "handled": true,
         "exact_match": false,
         "exec_acc": true,
@@ -304,6 +304,166 @@
           "self_corrected": 0.0
         }
       }
+    },
+    "trials": {
+      "n": 3,
+      "stats": {
+        "ea": {
+          "values": [
+            95.0,
+            95.0,
+            95.0
+          ],
+          "mean": 95.0,
+          "std": 0.0
+        },
+        "em": {
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "std": 0.0
+        },
+        "self_corrected": {
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "std": 0.0
+        },
+        "handled_rate": {
+          "values": [
+            100.0,
+            100.0,
+            100.0
+          ],
+          "mean": 100.0,
+          "std": 0.0
+        }
+      },
+      "per_trial_aggregates": [
+        {
+          "overall": {
+            "total": 20,
+            "handled_rate": 1.0,
+            "em": 0.0,
+            "ea": 0.95,
+            "self_corrected": 0.0
+          },
+          "by_category": {
+            "single_table": {
+              "total": 7,
+              "handled_rate": 1.0,
+              "em": 0.0,
+              "ea": 0.8571428571428571,
+              "self_corrected": 0.0
+            },
+            "join": {
+              "total": 5,
+              "handled_rate": 1.0,
+              "em": 0.0,
+              "ea": 1.0,
+              "self_corrected": 0.0
+            },
+            "aggregation": {
+              "total": 7,
+              "handled_rate": 1.0,
+              "em": 0.0,
+              "ea": 1.0,
+              "self_corrected": 0.0
+            },
+            "time_series": {
+              "total": 1,
+              "handled_rate": 1.0,
+              "em": 0.0,
+              "ea": 1.0,
+              "self_corrected": 0.0
+            }
+          }
+        },
+        {
+          "overall": {
+            "total": 20,
+            "handled_rate": 1.0,
+            "em": 0.0,
+            "ea": 0.95,
+            "self_corrected": 0.0
+          },
+          "by_category": {
+            "single_table": {
+              "total": 7,
+              "handled_rate": 1.0,
+              "em": 0.0,
+              "ea": 0.8571428571428571,
+              "self_corrected": 0.0
+            },
+            "join": {
+              "total": 5,
+              "handled_rate": 1.0,
+              "em": 0.0,
+              "ea": 1.0,
+              "self_corrected": 0.0
+            },
+            "aggregation": {
+              "total": 7,
+              "handled_rate": 1.0,
+              "em": 0.0,
+              "ea": 1.0,
+              "self_corrected": 0.0
+            },
+            "time_series": {
+              "total": 1,
+              "handled_rate": 1.0,
+              "em": 0.0,
+              "ea": 1.0,
+              "self_corrected": 0.0
+            }
+          }
+        },
+        {
+          "overall": {
+            "total": 20,
+            "handled_rate": 1.0,
+            "em": 0.0,
+            "ea": 0.95,
+            "self_corrected": 0.0
+          },
+          "by_category": {
+            "single_table": {
+              "total": 7,
+              "handled_rate": 1.0,
+              "em": 0.0,
+              "ea": 0.8571428571428571,
+              "self_corrected": 0.0
+            },
+            "join": {
+              "total": 5,
+              "handled_rate": 1.0,
+              "em": 0.0,
+              "ea": 1.0,
+              "self_corrected": 0.0
+            },
+            "aggregation": {
+              "total": 7,
+              "handled_rate": 1.0,
+              "em": 0.0,
+              "ea": 1.0,
+              "self_corrected": 0.0
+            },
+            "time_series": {
+              "total": 1,
+              "handled_rate": 1.0,
+              "em": 0.0,
+              "ea": 1.0,
+              "self_corrected": 0.0
+            }
+          }
+        }
+      ]
     }
   },
   "mini": {
@@ -426,7 +586,7 @@
         "difficulty": "medium",
         "question": "查询每个订单对应的用户名和套餐名",
         "gold_sql": "SELECT o.id, u.username, p.plan_name FROM orders o JOIN users u ON o.user_id = u.id JOIN plans p ON o.plan_id = p.id",
-        "gen_sql": "SELECT o.id AS order_id, u.name AS user_name, p.name AS plan_name FROM orders o JOIN users u ON o.user_id = u.id JOIN plans p ON o.plan_id = p.id ORDER BY o.id LIMIT 1000",
+        "gen_sql": "SELECT o.id AS order_id, u.name AS user_name, p.name AS plan_name FROM orders o JOIN users u ON o.user_id = u.id JOIN plans p ON o.plan_id = p.id LIMIT 1000",
         "handled": true,
         "exact_match": false,
         "exec_acc": true,
@@ -474,7 +634,7 @@
         "difficulty": "hard",
         "question": "查询购买了尊享版套餐的用户邮箱",
         "gold_sql": "SELECT u.email FROM users u JOIN orders o ON u.id = o.user_id JOIN plans p ON o.plan_id = p.id WHERE p.plan_name LIKE '%尊享%'",
-        "gen_sql": "SELECT u.email AS 用户邮箱, u.phone_number AS 手机号, p.name AS 套餐名称\nFROM users u\nJOIN orders o ON u.id = o.user_id\nJOIN plans p ON o.plan_id = p.id\nWHERE p.name = '尊享版' AND o.status IN ('paid', 'activated')\nGROUP BY u.id, u.email, u.phone_number, p.name\nORDER BY u.email\nLIMIT 1000",
+        "gen_sql": "SELECT u.email AS 用户邮箱\nFROM users u\nJOIN orders o ON u.id = o.user_id\nJOIN plans p ON o.plan_id = p.id\nWHERE p.name = '尊享版'\n  AND o.status IN ('paid', 'activated')\nGROUP BY u.id, u.email\nORDER BY u.email\nLIMIT 1000",
         "handled": true,
         "exact_match": false,
         "exec_acc": true,
@@ -554,12 +714,12 @@
         "difficulty": "medium",
         "question": "统计各地区的用户数量",
         "gold_sql": "SELECT region, COUNT(*) FROM users GROUP BY region",
-        "gen_sql": "SELECT region, COUNT(*) AS user_count FROM users GROUP BY region ORDER BY user_count DESC",
-        "handled": false,
+        "gen_sql": "SELECT region, COUNT(*) AS user_count FROM users GROUP BY region ORDER BY COUNT(*) DESC",
+        "handled": true,
         "exact_match": false,
         "exec_acc": true,
         "retries": 4,
-        "self_corrected": false,
+        "self_corrected": true,
         "context_len": 5676,
         "blocked": false,
         "block_reason": ""
@@ -632,10 +792,10 @@
     "aggregate": {
       "overall": {
         "total": 20,
-        "handled_rate": 0.95,
+        "handled_rate": 1.0,
         "em": 0.05,
         "ea": 1.0,
-        "self_corrected": 0.15
+        "self_corrected": 0.2
       },
       "by_category": {
         "single_table": {
@@ -654,10 +814,10 @@
         },
         "aggregation": {
           "total": 7,
-          "handled_rate": 0.8571428571428571,
+          "handled_rate": 1.0,
           "em": 0.0,
           "ea": 1.0,
-          "self_corrected": 0.2857142857142857
+          "self_corrected": 0.42857142857142855
         },
         "time_series": {
           "total": 1,
@@ -667,309 +827,166 @@
           "self_corrected": 0.0
         }
       }
-    }
-  },
-  "vanna": {
-    "rows": [
-      {
-        "id": "Q001",
-        "category": "single_table",
-        "difficulty": "easy",
-        "question": "查询所有 eSIM 套餐的名称和价格",
-        "gold_sql": "SELECT plan_name, price FROM plans",
-        "gen_sql": "SELECT /*+ MAX_EXECUTION_TIME(30000) */ name, price FROM plans LIMIT 1000;",
-        "handled": true,
-        "exact_match": false,
-        "exec_acc": true,
-        "retries": 0,
-        "self_corrected": false
-      },
-      {
-        "id": "Q002",
-        "category": "single_table",
-        "difficulty": "easy",
-        "question": "列出所有运营商的名称",
-        "gold_sql": "SELECT operator_name FROM operators",
-        "gen_sql": "SELECT /*+ MAX_EXECUTION_TIME(30000) */ name FROM operators LIMIT 1000;",
-        "handled": true,
-        "exact_match": false,
-        "exec_acc": true,
-        "retries": 0,
-        "self_corrected": false
-      },
-      {
-        "id": "Q003",
-        "category": "single_table",
-        "difficulty": "easy",
-        "question": "查询 id 为 1 的用户信息",
-        "gold_sql": "SELECT * FROM users WHERE id = 1",
-        "gen_sql": "SELECT /*+ MAX_EXECUTION_TIME(30000) */ * FROM users WHERE id = 1 LIMIT 1000;",
-        "handled": true,
-        "exact_match": false,
-        "exec_acc": true,
-        "retries": 0,
-        "self_corrected": false
-      },
-      {
-        "id": "Q004",
-        "category": "single_table",
-        "difficulty": "easy",
-        "question": "统计总共有多少个 eSIM 套餐",
-        "gold_sql": "SELECT COUNT(*) FROM plans",
-        "gen_sql": "SELECT /*+ MAX_EXECUTION_TIME(30000) */ COUNT(*) AS total_plans FROM plans LIMIT 1000;",
-        "handled": true,
-        "exact_match": false,
-        "exec_acc": true,
-        "retries": 0,
-        "self_corrected": false
-      },
-      {
-        "id": "Q005",
-        "category": "single_table",
-        "difficulty": "medium",
-        "question": "查询所有已激活的用户档案",
-        "gold_sql": "SELECT * FROM esim_profiles WHERE status = 'active'",
-        "gen_sql": "SELECT /*+ MAX_EXECUTION_TIME(30000) */ * FROM esim_profiles WHERE profile_status = 'active' LIMIT 1000;",
-        "handled": true,
-        "exact_match": false,
-        "exec_acc": true,
-        "retries": 0,
-        "self_corrected": false
-      },
-      {
-        "id": "Q006",
-        "category": "single_table",
-        "difficulty": "medium",
-        "question": "列出价格大于 50 元的套餐",
-        "gold_sql": "SELECT * FROM plans WHERE price > 50",
-        "gen_sql": "SELECT /*+ MAX_EXECUTION_TIME(30000) */ id, name, price, currency, type, data_volume_mb, voice_minutes FROM plans WHERE price > 50 ORDER BY price LIMIT 1000;",
-        "handled": true,
-        "exact_match": false,
-        "exec_acc": true,
-        "retries": 0,
-        "self_corrected": false
-      },
-      {
-        "id": "Q007",
-        "category": "single_table",
-        "difficulty": "medium",
-        "question": "查询所有处于漫游状态的套餐包",
-        "gold_sql": "SELECT * FROM roaming_packages WHERE status = 'active'",
-        "gen_sql": "SELECT /*+ MAX_EXECUTION_TIME(30000) */ * FROM roaming_packages WHERE status = 'active' LIMIT 1000;",
-        "handled": true,
-        "exact_match": false,
-        "exec_acc": true,
-        "retries": 0,
-        "self_corrected": false
-      },
-      {
-        "id": "Q008",
-        "category": "join",
-        "difficulty": "medium",
-        "question": "查询每个订单对应的用户名和套餐名",
-        "gold_sql": "SELECT o.id, u.username, p.plan_name FROM orders o JOIN users u ON o.user_id = u.id JOIN plans p ON o.plan_id = p.id",
-        "gen_sql": "SELECT /*+ MAX_EXECUTION_TIME(30000) */ o.id AS order_id, u.phone_number AS user_phone, u.email AS user_email, p.name AS plan_name\nFROM orders o\nJOIN users u ON o.user_id = u.id\nJOIN plans p ON o.plan_id = p.id\n LIMIT 1000;",
-        "handled": true,
-        "exact_match": false,
-        "exec_acc": true,
-        "retries": 0,
-        "self_corrected": false
-      },
-      {
-        "id": "Q009",
-        "category": "join",
-        "difficulty": "medium",
-        "question": "查询每个用户的 eSIM 档案状态和用户名",
-        "gold_sql": "SELECT u.username, e.status FROM users u JOIN esim_profiles e ON u.id = e.user_id",
-        "gen_sql": "SELECT /*+ MAX_EXECUTION_TIME(30000) */ u.id AS user_id, u.iccid, u.email, u.phone_number, ep.profile_status, ep.iccid AS profile_iccid FROM users u LEFT JOIN esim_profiles ep ON u.id = ep.user_id LIMIT 1000;",
-        "handled": true,
-        "exact_match": false,
-        "exec_acc": true,
-        "retries": 0,
-        "self_corrected": false
-      },
-      {
-        "id": "Q010",
-        "category": "join",
-        "difficulty": "medium",
-        "question": "统计每个套餐的订单数量",
-        "gold_sql": "SELECT p.plan_name, COUNT(o.id) FROM plans p LEFT JOIN orders o ON p.id = o.plan_id GROUP BY p.plan_name",
-        "gen_sql": "SELECT /*+ MAX_EXECUTION_TIME(30000) */ p.name, COUNT(o.id) as order_count FROM plans p LEFT JOIN orders o ON p.id = o.plan_id GROUP BY p.id, p.name ORDER BY order_count DESC LIMIT 1000;",
-        "handled": true,
-        "exact_match": false,
-        "exec_acc": true,
-        "retries": 0,
-        "self_corrected": false
-      },
-      {
-        "id": "Q011",
-        "category": "join",
-        "difficulty": "hard",
-        "question": "查询购买了尊享版套餐的用户邮箱",
-        "gold_sql": "SELECT u.email FROM users u JOIN orders o ON u.id = o.user_id JOIN plans p ON o.plan_id = p.id WHERE p.plan_name LIKE '%尊享%'",
-        "gen_sql": "SELECT /*+ MAX_EXECUTION_TIME(30000) */ DISTINCT u.email\nFROM users u\nINNER JOIN orders o ON u.id = o.user_id\nINNER JOIN plans p ON o.plan_id = p.id\nWHERE p.name = '本地畅享套餐-尊享版'\n  AND o.status IN ('paid','activated') LIMIT 1000;",
-        "handled": true,
-        "exact_match": false,
-        "exec_acc": true,
-        "retries": 0,
-        "self_corrected": false
-      },
-      {
-        "id": "Q012",
-        "category": "join",
-        "difficulty": "medium",
-        "question": "查询每个运营商提供的套餐数量",
-        "gold_sql": "SELECT op.operator_name, COUNT(p.id) FROM operators op LEFT JOIN plans p ON op.id = p.operator_id GROUP BY op.operator_name",
-        "gen_sql": "SELECT /*+ MAX_EXECUTION_TIME(30000) */ o.name AS operator_name, COUNT(p.id) AS plan_count FROM operators o LEFT JOIN plans p ON o.id = p.mvno_id GROUP BY o.id, o.name ORDER BY plan_count DESC LIMIT 1000;",
-        "handled": true,
-        "exact_match": false,
-        "exec_acc": true,
-        "retries": 0,
-        "self_corrected": false
-      },
-      {
-        "id": "Q013",
-        "category": "aggregation",
-        "difficulty": "medium",
-        "question": "统计每种订单状态的订单数量",
-        "gold_sql": "SELECT status, COUNT(*) FROM orders GROUP BY status",
-        "gen_sql": "SELECT /*+ MAX_EXECUTION_TIME(30000) */ status, COUNT(*) AS order_count FROM orders GROUP BY status ORDER BY order_count DESC LIMIT 1000;",
-        "handled": true,
-        "exact_match": false,
-        "exec_acc": true,
-        "retries": 0,
-        "self_corrected": false
-      },
-      {
-        "id": "Q014",
-        "category": "aggregation",
-        "difficulty": "easy",
-        "question": "计算所有套餐的平均价格",
-        "gold_sql": "SELECT AVG(price) FROM plans",
-        "gen_sql": "SELECT /*+ MAX_EXECUTION_TIME(30000) */ AVG(price) AS avg_price FROM plans LIMIT 1000;",
-        "handled": true,
-        "exact_match": false,
-        "exec_acc": true,
-        "retries": 0,
-        "self_corrected": false
-      },
-      {
-        "id": "Q015",
-        "category": "aggregation",
-        "difficulty": "hard",
-        "question": "查询总销售额最高的套餐",
-        "gold_sql": "SELECT p.plan_name, SUM(o.amount) FROM plans p JOIN orders o ON p.id = o.plan_id GROUP BY p.plan_name ORDER BY SUM(o.amount) DESC LIMIT 1",
-        "gen_sql": "SELECT /*+ MAX_EXECUTION_TIME(30000) */ p.name AS plan_name, COUNT(o.id) AS order_count, SUM(o.amount) AS total_revenue FROM plans p LEFT JOIN orders o ON p.id = o.plan_id AND o.status IN ('paid','activated') GROUP BY p.id, p.name ORDER BY total_revenue DESC LIMIT 1000;",
-        "handled": true,
-        "exact_match": false,
-        "exec_acc": true,
-        "retries": 0,
-        "self_corrected": false
-      },
-      {
-        "id": "Q016",
-        "category": "aggregation",
-        "difficulty": "medium",
-        "question": "统计各地区的用户数量",
-        "gold_sql": "SELECT region, COUNT(*) FROM users GROUP BY region",
-        "gen_sql": "SELECT /*+ MAX_EXECUTION_TIME(30000) */ region, COUNT(*) AS user_count FROM users GROUP BY region ORDER BY user_count DESC LIMIT 1000;",
-        "handled": true,
-        "exact_match": false,
-        "exec_acc": true,
-        "retries": 0,
-        "self_corrected": false
-      },
-      {
-        "id": "Q017",
-        "category": "aggregation",
-        "difficulty": "easy",
-        "question": "查询所有订单的总金额",
-        "gold_sql": "SELECT SUM(amount) FROM orders",
-        "gen_sql": "SELECT /*+ MAX_EXECUTION_TIME(30000) */ SUM(amount) AS total_amount FROM orders LIMIT 1000;",
-        "handled": true,
-        "exact_match": false,
-        "exec_acc": true,
-        "retries": 0,
-        "self_corrected": false
-      },
-      {
-        "id": "Q018",
-        "category": "aggregation",
-        "difficulty": "hard",
-        "question": "统计每个月的订单总数",
-        "gold_sql": "SELECT DATE_FORMAT(created_at, '%Y-%m') AS month, COUNT(*) FROM orders GROUP BY month",
-        "gen_sql": "SELECT /*+ MAX_EXECUTION_TIME(30000) */ DATE_FORMAT(created_at, '%Y-%m') AS month, COUNT(*) AS order_count FROM orders GROUP BY month ORDER BY month LIMIT 1000;",
-        "handled": true,
-        "exact_match": false,
-        "exec_acc": true,
-        "retries": 0,
-        "self_corrected": false
-      },
-      {
-        "id": "Q019",
-        "category": "aggregation",
-        "difficulty": "medium",
-        "question": "查询平均订单金额",
-        "gold_sql": "SELECT AVG(amount) FROM orders",
-        "gen_sql": "SELECT /*+ MAX_EXECUTION_TIME(30000) */ ROUND(AVG(amount), 2) AS avg_order_amount FROM orders WHERE status IN ('paid','activated') LIMIT 1000;",
-        "handled": true,
-        "exact_match": false,
-        "exec_acc": true,
-        "retries": 0,
-        "self_corrected": false
-      },
-      {
-        "id": "Q020",
-        "category": "time_series",
-        "difficulty": "medium",
-        "question": "查询最近 7 天的订单数量",
-        "gold_sql": "SELECT COUNT(*) FROM orders WHERE created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)",
-        "gen_sql": "SELECT /*+ MAX_EXECUTION_TIME(30000) */ COUNT(*) AS order_count FROM orders WHERE created_at >= DATE_SUB(CURRENT_DATE, INTERVAL 7 DAY) LIMIT 1000;",
-        "handled": true,
-        "exact_match": false,
-        "exec_acc": true,
-        "retries": 0,
-        "self_corrected": false
-      }
-    ],
-    "aggregate": {
-      "overall": {
-        "total": 20,
-        "handled_rate": 1.0,
-        "em": 0.0,
-        "ea": 1.0,
-        "self_corrected": 0.0
-      },
-      "by_category": {
-        "single_table": {
-          "total": 7,
-          "handled_rate": 1.0,
-          "em": 0.0,
-          "ea": 1.0,
-          "self_corrected": 0.0
+    },
+    "trials": {
+      "n": 3,
+      "stats": {
+        "ea": {
+          "values": [
+            100.0,
+            100.0,
+            100.0
+          ],
+          "mean": 100.0,
+          "std": 0.0
         },
-        "join": {
-          "total": 5,
-          "handled_rate": 1.0,
-          "em": 0.0,
-          "ea": 1.0,
-          "self_corrected": 0.0
+        "em": {
+          "values": [
+            5.0,
+            5.0,
+            5.0
+          ],
+          "mean": 5.0,
+          "std": 0.0
         },
-        "aggregation": {
-          "total": 7,
-          "handled_rate": 1.0,
-          "em": 0.0,
-          "ea": 1.0,
-          "self_corrected": 0.0
+        "self_corrected": {
+          "values": [
+            15.0,
+            15.0,
+            20.0
+          ],
+          "mean": 16.7,
+          "std": 2.9
         },
-        "time_series": {
-          "total": 1,
-          "handled_rate": 1.0,
-          "em": 0.0,
-          "ea": 1.0,
-          "self_corrected": 0.0
+        "handled_rate": {
+          "values": [
+            95.0,
+            95.0,
+            100.0
+          ],
+          "mean": 96.7,
+          "std": 2.9
         }
-      }
+      },
+      "per_trial_aggregates": [
+        {
+          "overall": {
+            "total": 20,
+            "handled_rate": 0.95,
+            "em": 0.05,
+            "ea": 1.0,
+            "self_corrected": 0.15
+          },
+          "by_category": {
+            "single_table": {
+              "total": 7,
+              "handled_rate": 1.0,
+              "em": 0.14285714285714285,
+              "ea": 1.0,
+              "self_corrected": 0.14285714285714285
+            },
+            "join": {
+              "total": 5,
+              "handled_rate": 1.0,
+              "em": 0.0,
+              "ea": 1.0,
+              "self_corrected": 0.0
+            },
+            "aggregation": {
+              "total": 7,
+              "handled_rate": 0.8571428571428571,
+              "em": 0.0,
+              "ea": 1.0,
+              "self_corrected": 0.2857142857142857
+            },
+            "time_series": {
+              "total": 1,
+              "handled_rate": 1.0,
+              "em": 0.0,
+              "ea": 1.0,
+              "self_corrected": 0.0
+            }
+          }
+        },
+        {
+          "overall": {
+            "total": 20,
+            "handled_rate": 0.95,
+            "em": 0.05,
+            "ea": 1.0,
+            "self_corrected": 0.15
+          },
+          "by_category": {
+            "single_table": {
+              "total": 7,
+              "handled_rate": 1.0,
+              "em": 0.14285714285714285,
+              "ea": 1.0,
+              "self_corrected": 0.14285714285714285
+            },
+            "join": {
+              "total": 5,
+              "handled_rate": 1.0,
+              "em": 0.0,
+              "ea": 1.0,
+              "self_corrected": 0.0
+            },
+            "aggregation": {
+              "total": 7,
+              "handled_rate": 0.8571428571428571,
+              "em": 0.0,
+              "ea": 1.0,
+              "self_corrected": 0.2857142857142857
+            },
+            "time_series": {
+              "total": 1,
+              "handled_rate": 1.0,
+              "em": 0.0,
+              "ea": 1.0,
+              "self_corrected": 0.0
+            }
+          }
+        },
+        {
+          "overall": {
+            "total": 20,
+            "handled_rate": 1.0,
+            "em": 0.05,
+            "ea": 1.0,
+            "self_corrected": 0.2
+          },
+          "by_category": {
+            "single_table": {
+              "total": 7,
+              "handled_rate": 1.0,
+              "em": 0.14285714285714285,
+              "ea": 1.0,
+              "self_corrected": 0.14285714285714285
+            },
+            "join": {
+              "total": 5,
+              "handled_rate": 1.0,
+              "em": 0.0,
+              "ea": 1.0,
+              "self_corrected": 0.0
+            },
+            "aggregation": {
+              "total": 7,
+              "handled_rate": 1.0,
+              "em": 0.0,
+              "ea": 1.0,
+              "self_corrected": 0.42857142857142855
+            },
+            "time_series": {
+              "total": 1,
+              "handled_rate": 1.0,
+              "em": 0.0,
+              "ea": 1.0,
+              "self_corrected": 0.0
+            }
+          }
+        }
+      ]
     }
   },
   "verdict": {
@@ -978,9 +995,6 @@
     "naive_self_correction": 0.0,
     "mini_ea": 1.0,
     "mini_em": 0.05,
-    "mini_self_correction": 0.15,
-    "vanna_ea": 1.0,
-    "vanna_em": 0.0,
-    "vanna_self_correction": 0.0
+    "mini_self_correction": 0.16699999999999998
   }
 }

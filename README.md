@@ -290,7 +290,8 @@ python scripts/demo.py --feature security
 | 推理成本 | 0 | 每次 1 次 LLM | 每次 1-2 次 LLM | 每次若干 LLM 调用 |
 
 > 注：数据来自 `scripts/eval/compare_eval3.py` 前 20 题对齐实测（Vanna 走真实服务完整链路，
-> Mini Agent/纯 LLM 直出走 dry_run 模拟执行，`scripts/eval/compare_report3.json` 可复跑复核）。
+> Mini Agent/纯 LLM 直出走 dry_run 模拟执行）；可用 `--trials 3` 做**多轮重复评估**消除 LLM 随机性
+> （实测 Mini Agent EA **100.0±0.0%**、自愈率 **16.7±2.9%**，`scripts/eval/compare_report3.json` 可复跑复核）。
 
 **三路对比的关键结论（Agent 架构的增量价值）：**
 - **纯 LLM 直出 vs 自研 Mini Agent**：同一 LLM，仅差「RAG 检索 + 工具校验 + 自愈循环」，EA 95% → 100%，且 Mini Agent 有 **15% 的题首轮出错后靠自愈纠错成功**（纯 LLM 出错即败）。

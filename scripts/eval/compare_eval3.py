@@ -127,6 +127,70 @@ def _summary(name: str, agg: dict) -> None:
           f"self_corrected={o['self_corrected']*100:.1f}%")
 
 
+def _fmt_metric(stats: dict, key: str) -> str:
+    """格式化指标：多轮输出 mean±std，单轮输出 mean"""
+    s = stats[key]
+    if len(s["values"]) > 1:
+        return f"{s['mean']:.1f}±{s['std']:.1f}%"
+    return f"{s['mean']:.1f}%"
+
+
+def _summary_trials(name: str, agg: dict, stats: dict | None = None) -> None:
+    if not stats:
+        return _summary(name, agg)
+    o = agg["overall"]
+    print(f"  {name}: total={o['total']}  handled={_fmt_metric(stats, 'handled_rate')}  "
+          f"EM={_fmt_metric(stats, 'em')}  EA={_fmt_metric(stats, 'ea')}  "
+          f"self_corrected={_fmt_metric(stats, 'self_corrected')}")
+    if stats["ea"]["values"] and len(stats["ea"]["values"]) > 1:
+        print(f"      各轮 EA: {stats['ea']['values']}")
+        print(f"      各轮 self_corrected: {stats['self_corrected']['values']}")
+
+
+async def _run_trials(name: str, eval_fn, items: list[dict], limit: int,
+                      trials: int, **kw) -> tuple:
+    """多轮重复评估：同一评估集跑 N 轮，返回 (末轮 rows, 各轮 aggregate, 统计)
+
+    统计指标（ea/em/self_corrected/handled_rate）输出 均值 ± 标准差，
+    消除 LLM 随机性对单次评估的影响——这是严格 A/B 对照实验的基础。
+
+    Args:
+        name: 路线名（日志用）
+        eval_fn: 评估函数（同步或异步均可）
+        items: 评估集
+        limit: 题数限制（0=全部）
+        trials: 重复轮数（>=1）
+
+    Returns:
+        (rows_last, per_trial_aggregates, stats)
+        stats = {key: {"values": [...], "mean": float, "std": float}}（单位 %）
+    """
+    import inspect
+    import statistics
+
+    per_trial = []
+    rows_last = None
+    for t in range(1, trials + 1):
+        print(f"  [{name}] 第 {t}/{trials} 轮（LLM 随机性通过多轮取均值消除）...")
+        result = eval_fn(items, limit, **kw)
+        if inspect.isawaitable(result):
+            result = await result
+        rows = result
+        agg = aggregate(rows)
+        per_trial.append(agg)
+        rows_last = rows
+
+    stats = {}
+    for key in ("ea", "em", "self_corrected", "handled_rate"):
+        vals = [a["overall"][key] for a in per_trial]
+        stats[key] = {
+            "values": [round(v * 100, 1) for v in vals],
+            "mean": round(statistics.mean(vals) * 100, 1),
+            "std": round(statistics.stdev(vals) * 100, 1) if trials > 1 else 0.0,
+        }
+    return rows_last, per_trial, stats
+
+
 async def _amain() -> None:
     ap = argparse.ArgumentParser(description="三路对比评估（naive / mini / vanna）")
     ap.add_argument("--naive", action="store_true", help="跑纯 LLM 直出路线")
@@ -138,51 +202,78 @@ async def _amain() -> None:
     ap.add_argument("--mini-only", type=int, default=0, help="仅 mini 前 N 题（快捷验证）")
     ap.add_argument("--no-rag", action="store_true", help="Mini Agent 关闭 RAG（对照组）")
     ap.add_argument("--vanna-limit", type=int, default=0, help="vanna 题数（0=全部）")
+    ap.add_argument("--trials", type=int, default=1,
+                    help="多轮重复评估轮数（>1 时输出均值±标准差，消除 LLM 随机性）")
     args = ap.parse_args()
 
     items = json.load(open(TEST_SET, encoding="utf-8"))["items"]
-    report: dict = {"meta": {"test_set_size": len(items)}}
+    report: dict = {"meta": {"test_set_size": len(items), "trials": args.trials}}
 
     # 快捷模式
     if args.mini_only:
         args.mini, args.mini_limit = True, args.mini_only
 
+    if args.trials < 1:
+        raise SystemExit("--trials 必须 >= 1")
+
     print("=" * 66)
     print("三路对比：Vanna(完整 Agent) vs 自研 Mini Agent vs 纯 LLM 直出(Non-Agent)")
+    if args.trials > 1:
+        print(f"多轮重复评估（trials={args.trials}，输出均值±标准差）")
     print("=" * 66)
 
     if args.naive:
-        rows = await evaluate_naive(items, args.naive_limit)
-        agg = aggregate(rows)
-        report["naive"] = {"rows": rows, "aggregate": agg}
-        _summary("naive(纯 LLM 直出)", agg)
+        rows, per_trial, stats = await _run_trials(
+            "naive", evaluate_naive, items, args.naive_limit, args.trials)
+        agg = per_trial[-1]
+        report["naive"] = {
+            "rows": rows, "aggregate": agg,
+            "trials": {"n": args.trials, "stats": stats,
+                       "per_trial_aggregates": per_trial},
+        }
+        _summary_trials("naive(纯 LLM 直出)", agg, stats)
 
     if args.mini:
-        rows = await evaluate_mini(items, args.mini_limit, use_rag=not args.no_rag)
-        agg = aggregate(rows)
-        report["mini"] = {"rows": rows, "aggregate": agg}
+        rows, per_trial, stats = await _run_trials(
+            "mini", evaluate_mini, items, args.mini_limit, args.trials,
+            use_rag=not args.no_rag)
+        agg = per_trial[-1]
+        report["mini"] = {
+            "rows": rows, "aggregate": agg,
+            "trials": {"n": args.trials, "stats": stats,
+                       "per_trial_aggregates": per_trial},
+        }
         name = "mini(自研 Agent, no-RAG)" if args.no_rag else "mini(自研 Agent, RAG)"
-        _summary(name, agg)
+        _summary_trials(name, agg, stats)
 
     if args.vanna:
         vitems = items[:args.vanna_limit] if args.vanna_limit else items
         print(f"  [vanna] 实时评估（endpoint={args.endpoint}, {len(vitems)} 题）...")
-        rows = evaluate_vanna(vitems, args.endpoint)
-        agg = aggregate(rows)
-        report["vanna"] = {"rows": rows, "aggregate": agg}
-        _summary("vanna(完整 Agent)", agg)
+        rows, per_trial, stats = await _run_trials(
+            "vanna", evaluate_vanna, vitems, 0, args.trials, endpoint=args.endpoint)
+        agg = per_trial[-1]
+        report["vanna"] = {
+            "rows": rows, "aggregate": agg,
+            "trials": {"n": args.trials, "stats": stats,
+                       "per_trial_aggregates": per_trial},
+        }
+        _summary_trials("vanna(完整 Agent)", agg, stats)
 
-    # 结论对比（仅当至少两路存在）
+    # 结论对比（仅当至少两路存在；多轮时使用均值）
     verdict = {}
     for k in ("naive", "mini", "vanna"):
         if k in report:
-            verdict[f"{k}_ea"] = report[k]["aggregate"]["overall"]["ea"]
-            verdict[f"{k}_em"] = report[k]["aggregate"]["overall"]["em"]
-            verdict[f"{k}_self_correction"] = \
-                report[k]["aggregate"]["overall"]["self_corrected"]
+            tr = report[k].get("trials", {}).get("stats")
+            ea = tr["ea"]["mean"] / 100 if tr else report[k]["aggregate"]["overall"]["ea"]
+            em = tr["em"]["mean"] / 100 if tr else report[k]["aggregate"]["overall"]["em"]
+            sc = tr["self_corrected"]["mean"] / 100 if tr \
+                else report[k]["aggregate"]["overall"]["self_corrected"]
+            verdict[f"{k}_ea"] = ea
+            verdict[f"{k}_em"] = em
+            verdict[f"{k}_self_correction"] = sc
     if len(verdict) >= 4:
         report["verdict"] = verdict
-        print("\n[结论]")
+        print("\n[结论]（多轮均值）" if args.trials > 1 else "\n[结论]")
         for k, v in verdict.items():
             print(f"  {k} = {v*100:.1f}%")
 

@@ -18,6 +18,7 @@
 - **生产路径 LLM 重连（ResilientOpenAILlmService）** — `app/core/vanna_instance.py`：系统级断连演练发现核心 SQL 生成路径（Vanna Agent 流式调用）的 LLM 调用**无任何重试**，连接错误一次即败。新增 `ResilientOpenAILlmService(OpenAILlmService)` 包装 Vanna 的 LLM 服务，在建立流/非流式调用处复用 jittered 退避重连（APIConnectionError/RateLimitError 重试，其余错误不重试），流处理逻辑与父类一致。实测断连日志：`attempt 1/3 → retry in 0.09s (jittered) → attempt 2/3 → retry in 3.11s (jittered) → failed after 3 attempts`。新增 `tests/test_vanna_llm_resilience.py`（4 项，237 项总计）。
 - **重试决策矩阵明确化（可重试 vs 需人工介入）** — `app/core/llm.py`：补上"非超时连接错误（连接被拒绝/DNS 失败）也纳入抖动重试"的漏网点（此前被误归为 API 错误不重试）；API 错误（4xx/5xx，如 API Key 无效、参数错误、配额不足）**一律不重试**，带完整错误信息抛出并提示人工检查配置。系统级验证：改坏 API Key（401）→ 0 次重试、2.07s 快速失败、日志完整留痕；断连（ConnectError）→ 3 次 jittered 重试、9.8s。新增 `tests/test_llm_backoff.py` 2 项（连接拒绝重试 + API 错误信息引导人工介入），239 项总计。
 - **安全攻防用例扩充至 75 个** — `app/core/sql_security.py`：修复**注释拆分关键字绕过**漏洞（DRO/**/P == DROP，MySQL 会拼接执行——正则兜底按 MySQL 词法剥离注释拼接后命中危险词）；Prompt 注入补强（方括号 [SYSTEM] 指令前缀、角色扮演"数据库管理员"、"执行+危险动词"伪装指令）。`tests/test_security.py` 新增 30 项（危险操作全覆盖 / 库前缀与反引号绕过 / 编码与注释拆分 / CTE 与子查询隐藏 / Prompt 变体 / fail-closed 组合 / 结果检查层），239 → 269 项总计。
+- **多轮重复评估（严格 A/B 支持）** — `scripts/eval/compare_eval3.py` 新增 `--trials N`：同一评估集重复跑 N 轮，输出 EA/EM/自愈率**均值±标准差**，消除 LLM 随机性对单次评估的影响。实测（20 题 × 3 轮）：Mini Agent EA **100.0±0.0%**、自愈率 **16.7±2.9%**（各轮 15/15/20——单轮值存在抽样波动）；naive EA 95.0%、自愈 0%。报告新增 `trials` 字段（各轮明细 + stats）。
 
 ## [0.7.0] - 2026-08-06
 
