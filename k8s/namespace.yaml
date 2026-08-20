@@ -1,0 +1,7 @@
+# eSIM NL2SQL Platform - Kubernetes 命名空间
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: esim-nl2sql
+  labels:
+    app.kubernetes.io/part-of: esim-nl2sql-platform

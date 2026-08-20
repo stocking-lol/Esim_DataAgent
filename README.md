@@ -210,9 +210,10 @@ esim-nl2sql-platform/
 │   ├── migrate_audit_columns.py   # 审计表结构迁移
 │   └── eval/                      # 评估基准（build_test_set / run_eval）
 ├── monitoring/                    # Prometheus + Grafana 配置
+├── k8s/                           # Kubernetes 部署清单（Deployment/Service/ConfigMap/Secret）
 ├── docs/
 │   └── security_architecture.md   # 安全架构设计文档
-├── docker-compose.yml
+├── docker-compose.yml             # MySQL + ChromaDB + Redis + Prometheus + Grafana
 ├── requirements.txt
 ├── pyproject.toml
 └── .env.example
@@ -227,8 +228,9 @@ esim-nl2sql-platform/
 - **自我纠错回路（Day 18）**：`error_classifier` 将 SQL 错误分为 9 类（语法/表不存在/列不存在/歧义列/超时/权限/重复/连接/未知），其中 4 类可重试；`execute_query_with_retry` 捕获可重试错误后用 LLM 纠错并自动重试，记录纠错历史。
 - **查询结果可视化（Day 19）**：`visualization` 模块按数据形态自动推荐 bar/line/pie/table，并生成 Plotly HTML 图表随响应返回。
 - **监控告警（Day 20）**：`metrics` 中间件暴露 QPS、P95 延迟、安全拦截率、纠错率、查询准确率等业务指标（Prometheus `/metrics`）；配套 Prometheus 告警规则与 Grafana 仪表盘。
-- **查询缓存（Day 21）**：按 `(question, role, mvno_id)` 的 TTL 内存缓存，规避大模型重复生成开销。
-- **评估基准（Day 22）**：`scripts/eval/` 提供 54 题测试集（7 类 × 3 难度）与静态/在线两种评估模式，输出 Execution Accuracy + Exact Match 报告。
+- **查询缓存（Day 21）**：按 `(question, role, mvno_id)` 的 TTL 缓存，规避大模型重复生成开销；**双后端（内存 / Redis）**——`QUERY_CACHE_BACKEND=memory|redis|auto`，Redis 支持多副本跨实例共享，连接故障自动降级内存（fail-soft）。
+- **Kubernetes 部署（v0.9.0）**：`k8s/` 提供生产化清单（Deployment/Service/ConfigMap/Secret/PVC/三类探针），Redis 缓存跨副本共享、滚动扩展，配置与密钥分离。
+- **评估基准（Day 22）**：`scripts/eval/` 提供 54 题测试集（7 类 × 3 难度）与静态/在线两种评估模式，输出 Execution Accuracy + Exact Match 报告；支持 `--trials N` 多轮重复评估（均值±标准差）。
 
 ## 演示用例（快速体验）
 

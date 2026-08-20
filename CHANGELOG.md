@@ -5,6 +5,9 @@
 ## [Unreleased] - 2026-08-12
 
 ### 新增 (Added)
+- **Redis 查询缓存后端（v0.9.0）** — `app/services/query_cache.py` 重构为 CacheBackend 抽象（MemoryCacheBackend / RedisCacheBackend 双实现），支持 `QUERY_CACHE_BACKEND=memory|redis|auto`：Redis 后端用 `redis.asyncio` + JSON 序列化（QueryResult 完整往返）、TTL 原生过期、跨实例共享；连接故障自动降级内存（fail-soft，缓存故障不阻断主链路）。settings 新增 `REDIS_URL`；docker-compose 新增 redis 服务；`.env.example` 同步。新增 `tests/test_query_cache_redis.py`（9 项）。
+- **Kubernetes 部署清单（v0.9.0）** — `k8s/` 目录：namespace / ConfigMap（非敏感）/ Secret 示例（敏感分离）/ app Deployment（2 副本 + liveness/readiness/startup 三探针 + 资源限制）/ Service（NodePort）/ MySQL（含 PVC 持久化）/ Redis。配置经 envFrom 注入，多副本共享 Redis 缓存。配套 `k8s/README.md` 部署说明。
+- **后端补充学习计划** — `docs/backend_learning_plan.md`：针对项目特性（MySQL/Redis/Docker/K8s/FastAPI 异步/网络认证/安全/可观测/MQ/AI 栈）的 10 模块学习计划，标注已具备/需补强/新学，每项给出用项目验证的方式与两周冲刺节奏。
 - **自研 Mini Agent Runtime** — `app/core/mini_agent/`（约 800 行，34 项单测）：参考 Vanna 抽象思想、不依赖 Vanna 从零实现的轻量 Agent 底座，含 `ToolRegistry`（工具注册/访问组权限）、`SqlTool`（fail-closed 安全网关 + RLS + 超时；`dry_run` 用 sqlglot 模拟执行三级校验，可离线评估）、编排循环（检索→生成→执行→错误反馈→再生成，`max_iterations` 上限 + 错误分类决定是否重试 + 安全拦截不进入自愈）、对话记忆。
 - **自研混合检索（Hybrid Search）** — `app/core/mini_agent/rag.py`：解决英文 embedding（all-MiniLM-L6-v2）对中文查询的检索漂移——向量召回大候选池后按关键词重叠（Jaccard）与主题包含加权重排，并做上下文总量控制（SQL 示例 > 文档 > DDL 的保留优先级）。
 - **纯 LLM 直出对照组** — `app/core/mini_agent/naive.py`：单次调用、全量 schema 硬塞、无检索/无工具/无自愈，作为「非 Agent」对照基线。

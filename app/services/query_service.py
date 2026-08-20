@@ -322,7 +322,7 @@ async def execute_query_with_retry(
     last_failed_error: Optional[str] = None
 
     # --- 查询缓存命中检查（相同问题+角色+MVNO 的成功结果）---
-    cached = query_cache.get(question, user_role, user_mvno_id)
+    cached = await query_cache.get(question, user_role, user_mvno_id)
     if cached is not None:
         logger.info("Query cache HIT for role=%s, mvno=%s", user_role, user_mvno_id)
         return cached  # type: ignore[return-value]
@@ -408,7 +408,7 @@ async def execute_query_with_retry(
         and last_result.sql
     ):
         try:
-            query_cache.put(question, user_role, user_mvno_id, last_result)
+            await query_cache.put(question, user_role, user_mvno_id, last_result)
         except Exception as e:
             logger.warning("Query cache put error: %s", e)
 

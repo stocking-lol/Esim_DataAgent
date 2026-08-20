@@ -73,8 +73,29 @@ services:
   #       condition: service_healthy
   #     chromadb:
   #       condition: service_healthy
+  #     redis:
+  #       condition: service_healthy
+  #   environment:
+  #     - REDIS_URL=redis://redis:6379/0
+  #     - QUERY_CACHE_BACKEND=redis
   #   volumes:
   #     - .:/app
+
+  # --- Redis (查询缓存，跨实例共享) ---
+  redis:
+    image: redis:7-alpine
+    container_name: esim_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # --- Prometheus (指标采集与告警) ---
   prometheus:
@@ -116,6 +137,8 @@ volumes:
   mysql_data:
     driver: local
   chromadb_data:
+    driver: local
+  redis_data:
     driver: local
   prometheus_data:
     driver: local

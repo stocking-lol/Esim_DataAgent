@@ -77,6 +77,9 @@ class Settings(BaseSettings):
     QUERY_CACHE_ENABLED: bool = True
     QUERY_CACHE_TTL_SECONDS: int = 60
     QUERY_CACHE_MAX_SIZE: int = 200
+    # 缓存后端：memory（进程内）/ redis（跨实例共享）/ auto（优先 Redis，失败降级内存）
+    QUERY_CACHE_BACKEND: str = "memory"
+    REDIS_URL: str = "redis://localhost:6379/0"
 
     # --- Rate Limiting ---
     RATE_LIMIT_PER_MINUTE: int = 60
