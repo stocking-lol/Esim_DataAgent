@@ -270,7 +270,7 @@ python scripts/demo.py --feature security
 | 执行准确率（EA，前 20 题） | 规则基线 65% · 纯 LLM 直出 95% · 自研 Mini Agent **100%** · Vanna 95% |
 | 自我纠错 | 9 类 SQL 错误分类 + 自动重试回路（26 项单测覆盖） |
 
-## 技术选型：为什么用 Vanna（四路对照，数据说话）
+## 技术选型：为什么用 Vanna
 
 技术选型论证采用**同一套 54 题评估集、同一 LLM（DeepSeek-V3）、仅改变架构形态**的对照实验，四路基线：
 
