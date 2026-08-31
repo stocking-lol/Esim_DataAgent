@@ -13,7 +13,7 @@ import json
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
@@ -78,6 +78,7 @@ async def query_status() -> QueryResponse:
 async def natural_language_query(
     request: QueryRequest,
     http_request: Request,
+    user: Optional[dict] = Depends(get_optional_user),
 ) -> QueryResponse:
     """自然语言查询（非流式）
 
@@ -85,22 +86,6 @@ async def natural_language_query(
     集成安全网关、数据脱敏和审计日志。
     """
     logger.info("POST /query: '%s'", request.question[:100])
-
-    # 获取可选用户信息
-    try:
-        from app.core.auth import JWTManager
-        from fastapi.security import HTTPBearer
-        auth_header = http_request.headers.get("Authorization", "")
-        user_info = None
-        if auth_header.startswith("Bearer "):
-            token = auth_header[7:]
-            payload = JWTManager.verify_token(token)
-            user_info = {
-                "user_id": int(payload.get("sub", 0)),
-                "username": payload.get("username", ""),
-            }
-    except Exception:
-        user_info = None
 
     ip_address = _get_client_ip(http_request)
 
@@ -121,13 +106,14 @@ async def natural_language_query(
                     error_message=f"输入被安全网关拦截: {input_check.reason}",
                     execution_time_ms=0,
                     row_count=0,
-                    user_id=user_info["user_id"] if user_info else None,
-                    username=user_info["username"] if user_info else None,
+                    user_id=user["user_id"] if user else None,
+                    username=user["username"] if user else None,
                     ip_address=ip_address,
                     conversation_id=request.conversation_id,
                 )
             except Exception:
                 pass
+            http_request.state._audit_logged_by_service = True  # 坑⑪：API 层已写审计，中间件不重复
             return QueryResponse(
                 code=1001,
                 message=f"安全拦截: {input_check.reason}",
@@ -152,9 +138,36 @@ async def natural_language_query(
         question=request.question,
         conversation_id=request.conversation_id,
         ip_address=ip_address,
-        user_id=user_info["user_id"] if user_info else None,
-        username=user_info["username"] if user_info else None,
+        user_id=user["user_id"] if user else None,
+        username=user["username"] if user else None,
+        user_role=user["role"] if user else "viewer",
+        user_mvno_id=user.get("mvno_id") if user else None,
     )
+    # 坑⑪：service 层已写审计，中间件不重复写入
+    http_request.state._audit_logged_by_service = True
+
+    # 坑⑯：/query 入口与对话入口一致地保存会话（携带 conversation_id 时）
+    if request.conversation_id:
+        try:
+            from app.services.conversation_service import ConversationService
+            conv_svc = ConversationService()
+            sql_status = (
+                "blocked" if result.blocked else ("error" if result.error else "success")
+            )
+            conv_svc.save_query_turn(
+                conversation_id=request.conversation_id,
+                question=request.question,
+                sql=result.sql,
+                data_summary=result.summary
+                or ("查询完成" if sql_status == "success" else "查询失败"),
+                row_count=result.row_count,
+                execution_time_ms=result.execution_time_ms,
+                sql_status=sql_status,
+                error_message=result.error if sql_status != "success" else None,
+            )
+            conv_svc.close()
+        except Exception as e:
+            logger.warning("Failed to save conversation turn: %s", e)
 
     # 安全拦截
     if result.blocked:
@@ -206,7 +219,11 @@ async def natural_language_query(
 
 
 @router.post("/stream")
-async def natural_language_query_stream(request: QueryRequest):
+async def natural_language_query_stream(
+    request: QueryRequest,
+    http_request: Request,
+    user: Optional[dict] = Depends(get_optional_user),
+):
     """自然语言查询（流式 SSE）
 
     使用 Server-Sent Events 逐步返回查询进度和结果。
@@ -218,6 +235,19 @@ async def natural_language_query_stream(request: QueryRequest):
     - done: 查询完成（含执行时间）
     - error: 错误信息
     """
+
+    # 坑⑩：流式路径与普通路径一致的 API 层输入过滤（Agent 不可用时也拦截）
+    try:
+        from app.core.sql_security import sql_gateway
+        input_check = sql_gateway.check_input(request.question)
+        if not input_check.passed:
+            logger.warning("Input blocked at API layer (stream): %s", input_check.reason)
+            return EventSourceResponse(
+                _error_generator(f"安全拦截: {input_check.reason}"),
+                media_type="text/event-stream",
+            )
+    except Exception as e:
+        logger.warning("Input filter error at API layer (stream, allowing): %s", e)
     if not vanna_manager.is_initialized:
         return EventSourceResponse(
             _error_generator("Vanna Agent 未初始化"),
@@ -226,11 +256,17 @@ async def natural_language_query_stream(request: QueryRequest):
 
     logger.info("POST /query/stream: '%s'", request.question[:100])
 
+
     async def event_generator():
         try:
             async for event in execute_query_stream(
                 question=request.question,
                 conversation_id=request.conversation_id,
+                ip_address=_get_client_ip(http_request),
+                user_id=user["user_id"] if user else None,
+                username=user["username"] if user else None,
+                user_role=user["role"] if user else "viewer",
+                user_mvno_id=user.get("mvno_id") if user else None,
             ):
                 yield {
                     "event": event["type"],
@@ -242,6 +278,9 @@ async def natural_language_query_stream(request: QueryRequest):
                 "event": "error",
                 "data": json.dumps({"type": "error", "data": str(e)}, ensure_ascii=False),
             }
+
+    # 坑⑪：流式路径由 execute_query_stream 在 service 层审计，中间件不重复
+    http_request.state._audit_logged_by_service = True
 
     return EventSourceResponse(
         event_generator(),

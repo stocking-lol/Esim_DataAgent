@@ -20,6 +20,14 @@ data:
   QUERY_CACHE_BACKEND: "redis"
   REDIS_URL: "redis://esim-redis:6379/0"
 
+  # --- ChromaDB ---
+  # K8s 多副本下必须用 http 模式连独立 Server，否则每个 Pod 各持一份数据会永久分叉
+  CHROMA_CLIENT_MODE: "http"
+  CHROMADB_HOST: "esim-chroma"
+  CHROMADB_PORT: "8000"
+  CHROMA_HTTP_SSL: "false"
+  CHROMA_HTTP_TIMEOUT: "30"
+
   # --- 功能开关 ---
   ENABLE_METRICS: "true"
   AUTO_INIT_TRAINING: "true"

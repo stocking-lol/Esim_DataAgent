@@ -33,6 +33,12 @@ class UpdateUserRoleRequest(BaseModel):
     role: str = Field(..., description="新角色: admin/analyst/viewer")
 
 
+class UpdateAccuracyRequest(BaseModel):
+    """更新质量指标请求（坑⑫：给评估作业提供写入点）"""
+    accuracy: float = Field(..., ge=0.0, le=1.0, description="执行准确率 0~1")
+    active_users: int | None = Field(None, ge=0, description="活跃用户数")
+
+
 # ============================================================
 # 用户管理端点
 # ============================================================
@@ -142,6 +148,31 @@ async def deactivate_user(
         }
     except ValueError as e:
         raise NotFoundException(str(e))
+
+
+# ============================================================
+# 质量指标写入端点（坑⑫）
+# ============================================================
+
+@router.post("/metrics/accuracy", response_model=dict)
+async def update_accuracy(
+    req: UpdateAccuracyRequest,
+    admin: dict = Depends(require_admin),
+):
+    """写入查询准确率与活跃用户数（供评估作业调用，只有 admin 可写）"""
+    from app.middleware.metrics import metrics
+
+    metrics.set_query_accuracy(req.accuracy)
+    if req.active_users is not None:
+        metrics.set_active_users(req.active_users)
+    return {
+        "code": 200,
+        "message": "success",
+        "data": {
+            "accuracy": req.accuracy,
+            "active_users": req.active_users,
+        },
+    }
 
 
 # ============================================================

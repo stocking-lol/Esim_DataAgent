@@ -57,6 +57,12 @@ nl2sql_correction_total = Counter(
     ["success"],
 )
 
+# 审计写入失败计数器（坑⑪：审计失败不再静默）
+nl2sql_audit_failed_total = Counter(
+    "nl2sql_audit_failed_total",
+    "Total number of failed audit log writes",
+)
+
 # 查询准确率（瞬时值）
 nl2sql_query_accuracy = Gauge(
     "nl2sql_query_accuracy",
@@ -129,6 +135,11 @@ class MetricsRecorder:
             count: 活跃用户数量
         """
         nl2sql_active_users.set(max(0, count))
+
+    @staticmethod
+    def record_audit_failed() -> None:
+        """记录一次审计写入失败（坑⑪）"""
+        nl2sql_audit_failed_total.inc()
 
 
 # 全局单例

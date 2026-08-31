@@ -97,6 +97,7 @@ DEMO_USERS = {
         "username": "analyst",
         "password": "esim_analyst_2026",
         "role": "analyst",
+        "mvno_id": 1,
     },
 }
 
@@ -117,6 +118,7 @@ class AuthManager:
                 "user_id": user["user_id"],
                 "username": user["username"],
                 "role": user["role"],
+                "mvno_id": user.get("mvno_id"),
             }
         return None
 
@@ -131,6 +133,7 @@ class AuthManager:
             "sub": str(user["user_id"]),
             "username": user["username"],
             "role": user["role"],
+            "mvno_id": user.get("mvno_id"),
         })
 
         return {
@@ -184,6 +187,7 @@ class DBAuthManager:
             "sub": str(user["user_id"]),
             "username": user["username"],
             "role": user["role"],
+            "mvno_id": user.get("mvno_id"),
         })
 
         return {
@@ -248,24 +252,46 @@ async def get_current_user(
         "user_id": int(payload.get("sub", 0)),
         "username": payload.get("username", ""),
         "role": payload.get("role", ""),
+        "mvno_id": payload.get("mvno_id"),
     }
 
 
 async def get_optional_user(
     credentials: HTTPAuthorizationCredentials = Depends(security_scheme),
 ) -> Optional[dict]:
-    """获取当前用户（可选，未认证返回 None）"""
+    """获取当前用户（可选，未认证返回 None）
+
+    语义边界（重要）:
+        - **未提供凭据** → 返回 None，接口按匿名处理（如 /query 允许游客体验）
+        - **提供了但无效/过期** → 抛 401，**绝不静默降级为匿名**
+
+    为什么过期必须报错而不是降级：
+        早期实现用 `except HTTPException: return None` 吞掉了 401，
+        导致 token 过期后调用方拿到 user=None，仍以匿名身份继续执行。
+        对写操作而言这会把数据写成 user_id=NULL 的「孤儿记录」——
+        创建对话成功（HTTP 200）却在列表中永远查不到，故障静默且难排查。
+        这里遵循与 SQL 安全网关一致的 **fail-closed** 原则：
+        宁可显式报错，也不静默降级。
+    """
     if credentials is None:
         return None
+
     try:
         payload = JWTManager.verify_token(credentials.credentials)
-        return {
-            "user_id": int(payload.get("sub", 0)),
-            "username": payload.get("username", ""),
-            "role": payload.get("role", ""),
-        }
-    except HTTPException:
-        return None
+    except HTTPException as e:
+        # 凭据存在但校验失败：过期 / 签名错误 / 被篡改。
+        # 不再返回 None —— 让调用方（与前端）明确感知认证失效。
+        logger.warning(
+            "拒绝无效凭据（fail-closed）: %s", e.detail
+        )
+        raise
+
+    return {
+        "user_id": int(payload.get("sub", 0)),
+        "username": payload.get("username", ""),
+        "role": payload.get("role", ""),
+        "mvno_id": payload.get("mvno_id"),
+    }
 
 
 async def require_admin(user: dict = Depends(get_current_user)) -> dict:

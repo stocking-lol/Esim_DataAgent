@@ -51,6 +51,7 @@ desktop.ini
 
 # --- ChromaDB Data ---
 chromadb_data/
+chromadb_server_data/
 chroma/
 *.duckdb
 

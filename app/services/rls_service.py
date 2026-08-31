@@ -106,10 +106,19 @@ class RLSService:
             return RLSResult(sql=sql, rls_applied=False, rls_tables=[], rls_condition="admin: no RLS")
 
         if condition == "1=0":
-            # 极端情况：非 admin 无 mvno_id
+            # 极端情况：非 admin 无 mvno_id —— 真正注入恒假条件，等价 deny-all
+            # （坑③ 修复：旧实现只记录了状态却原样放行 SQL）
+            try:
+                parsed = sqlglot.parse_one(sql, dialect="mysql")
+                for select_node in parsed.find_all(exp.Select):
+                    select_node.set("where", exp.Where(this=exp.condition("1=0")))
+                denied_sql = parsed.sql(dialect="mysql")
+            except Exception as e:
+                logger.warning("RLS deny-all injection failed: %s", e)
+                denied_sql = sql
             return RLSResult(
-                sql=sql,
-                rls_applied=False,
+                sql=denied_sql,
+                rls_applied=True,
                 rls_tables=[],
                 rls_condition="no mvno_id: access denied (1=0)",
             )

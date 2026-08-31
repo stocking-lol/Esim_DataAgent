@@ -71,29 +71,46 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.window_seconds = 60
         self._windows: dict[str, SlidingWindow] = defaultdict(SlidingWindow)
         self._lock = Lock()
+        self._last_cleanup = 0.0  # 坑⑬：周期性清理空窗口，防止内存无限增长
         logger.info(
             "RateLimitMiddleware initialized: query=%d/min, default=%d/min",
             query_limit, default_limit,
         )
 
     def _get_client_ip(self, request: Request) -> str:
-        """获取客户端真实 IP（支持代理转发）"""
-        # 优先从 X-Forwarded-For 获取
-        forwarded = request.headers.get("X-Forwarded-For")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
-        # 其次从 X-Real-IP
-        real_ip = request.headers.get("X-Real-IP")
-        if real_ip:
-            return real_ip.strip()
-        # 兜底：直接连接 IP
-        return request.client.host if request.client else "unknown"
+        """获取客户端真实 IP
+
+        坑⑬：只有来自可信代理的连接才采信 X-Forwarded-For / X-Real-IP，
+        否则直接使用 TCP 对端地址 —— 避免攻击者伪造转发头绕过限流。
+        """
+        remote = request.client.host if request.client else "unknown"
+        if remote in settings.TRUSTED_PROXY_IPS:
+            forwarded = request.headers.get("X-Forwarded-For")
+            if forwarded:
+                return forwarded.split(",")[0].strip()
+            real_ip = request.headers.get("X-Real-IP")
+            if real_ip:
+                return real_ip.strip()
+        return remote
 
     def _get_limit_for_path(self, path: str) -> int:
         """根据路径获取限流配额"""
         if "/query" in path:
             return self.query_limit
         return self.default_limit
+
+    @staticmethod
+    def _user_key(request: Request) -> str:
+        """从 Bearer token 提取用户维度键（坑⑬：限流从 per-IP 升级为 user+IP）"""
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return "anon"
+        try:
+            from app.core.auth import JWTManager
+            payload = JWTManager.verify_token(auth_header[7:])
+            return str(payload.get("sub", "anon"))
+        except Exception:
+            return "bad-token"
 
     async def dispatch(
         self, request: Request, call_next: RequestResponseEndpoint
@@ -104,9 +121,18 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         client_ip = self._get_client_ip(request)
         limit = self._get_limit_for_path(request.url.path)
-        key = f"{client_ip}:{request.url.path.split('/')[3] if len(request.url.path.split('/')) > 3 else 'default'}"
+        path_group = request.url.path.split('/')[3] if len(request.url.path.split('/')) > 3 else 'default'
+        key = f"{self._user_key(request)}:{client_ip}:{path_group}"
 
         now = time.time()
+
+        # 坑⑬：周期性清理空窗口，防止 IP/用户枚举导致内存无限增长
+        if now - self._last_cleanup > 300:
+            with self._lock:
+                stale = [k for k, w in self._windows.items() if not w.timestamps]
+                for k in stale:
+                    del self._windows[k]
+            self._last_cleanup = now
 
         with self._lock:
             window = self._windows[key]

@@ -1,0 +1,117 @@
+# eSIM NL2SQL Platform - ChromaDB Server（RAG 向量库，独立服务 + 数据持久化）
+#
+# 为什么必须独立部署：
+#   K8s 下应用是 2 副本（k8s/app-deployment.yaml），若继续使用进程内
+#   PersistentClient，每个 Pod 会各持一份独立的 ChromaDB 数据并永久分叉
+#   （运行时结果就不一致），且 Pod 重启后数据丢失。
+#   独立 Server 让 app 变成无状态客户端（HttpClient），把写入者收敛为单进程。
+#   详见 docs/pitfalls_chromadb_server.md
+#
+# 注意：replicas 必须为 1。Chroma Server 内部仍是 SQLite + 本地 HNSW 索引文件，
+#   加副本会重蹈数据分叉的覆辙。它的高可用靠 PVC 持久化 + K8s 快速重启 +
+#   定期快照备份，而不是横向扩容。
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: esim-chroma-pvc
+  namespace: esim-nl2sql
+  labels:
+    app: esim-chroma
+spec:
+  # 只有 1 个 chroma Pod 挂载，RWO 即可。
+  # 不需要 ReadWriteMany（更贵，且不是所有 StorageClass 都支持）
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: esim-chroma
+  namespace: esim-nl2sql
+  labels:
+    app: esim-chroma
+spec:
+  # 必须单副本，原因见文件头注释
+  replicas: 1
+  selector:
+    matchLabels:
+      app: esim-chroma
+  template:
+    metadata:
+      labels:
+        app: esim-chroma
+    spec:
+      containers:
+        - name: chroma
+          # 必须与 Python SDK 的 chromadb 版本匹配（requirements 当前为 1.5.9）。
+          # 版本不一致会出现 API 协议不兼容，例如 v1 / v2 接口差异
+          image: chromadb/chroma:1.5.9
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: IS_PERSISTENT
+              value: "TRUE"
+            - name: PERSIST_DIRECTORY
+              value: /chroma/chroma
+            - name: ANONYMIZED_TELEMETRY
+              value: "FALSE"
+            - name: ALLOW_RESET
+              value: "TRUE"
+          # 探针端点：chromadb >= 1.x 起 v1 API 已废弃，必须用 /api/v2/heartbeat。
+          # 沿用旧的 /api/v1/heartbeat 会返回 Unimplemented，导致 Pod 永远起不来。
+          # 首次启动要初始化 SQLite，给足启动窗口
+          startupProbe:
+            httpGet:
+              path: /api/v2/heartbeat
+              port: http
+            failureThreshold: 30
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/v2/heartbeat
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /api/v2/heartbeat
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: chroma-data
+              mountPath: /chroma/chroma
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              # HNSW 索引常驻内存，训练数据量增长后需要上调
+              memory: 1Gi
+      volumes:
+        - name: chroma-data
+          persistentVolumeClaim:
+            claimName: esim-chroma-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: esim-chroma
+  namespace: esim-nl2sql
+  labels:
+    app: esim-chroma
+spec:
+  type: ClusterIP
+  selector:
+    app: esim-chroma
+  ports:
+    # 集群内端口固定 8000（即容器监听端口）。
+    # 与 docker-compose.yml 的 "8001:8000" 不同：8001 只是宿主机映射端口
+    - name: http
+      port: 8000
+      targetPort: http

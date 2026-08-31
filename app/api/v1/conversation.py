@@ -55,6 +55,12 @@ class ApiResponse(BaseModel):
     data: Optional[dict] = None
 
 
+def _ensure_conversation_owner(conv, user: dict) -> None:
+    """坑⑨：会话是私有资源，非 owner（admin 除外）禁止读写。"""
+    if user.get("role") != "admin" and conv.user_id != user.get("user_id"):
+        raise HTTPException(status_code=403, detail="无权访问该对话")
+
+
 # --- API 端点 ---
 
 @router.get("/status")
@@ -78,18 +84,24 @@ async def conversation_status() -> ApiResponse:
 @router.post("", response_model=ApiResponse)
 async def create_conversation(
     req: CreateConversationRequest,
-    user: Optional[dict] = Depends(get_optional_user),
+    user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ApiResponse:
     """创建新对话
 
-    创建一个新的对话会话。登录用户自动关联 user_id 和 username。
+    创建一个新的对话会话，自动关联当前登录用户的 user_id 和 username。
+
+    为什么这里用 get_current_user 而不是 get_optional_user：
+        对话是按用户隔离的私有资源（列表接口按 user_id 过滤）。
+        若允许匿名创建，会写入 user_id=NULL 的「孤儿对话」——
+        创建返回 200 但列表永远查不到，表现为「对话历史凭空消失」。
+        因此强制要求有效凭据，过期一律 401（由前端引导重新登录）。
     """
     svc = ConversationService(db)
     try:
         conv = svc.create_conversation(
-            user_id=user["user_id"] if user else None,
-            username=user["username"] if user else None,
+            user_id=user["user_id"],
+            username=user["username"],
             title=req.title,
         )
         return ApiResponse(
@@ -139,21 +151,25 @@ async def list_conversations(
 @router.get("/{conversation_id}", response_model=ApiResponse)
 async def get_conversation_detail(
     conversation_id: str,
+    user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ApiResponse:
     """获取对话详情（含所有消息）
 
     返回对话元数据和按时间正序排列的所有消息。
+    坑⑨：强制登录 + owner 校验，匿名/他人不可读。
     """
     svc = ConversationService(db)
     try:
-        result = svc.get_conversation_with_messages(conversation_id)
-        if not result:
+        conv = svc.get_conversation(conversation_id)
+        if not conv:
             return ApiResponse(
                 code=404,
                 message="对话不存在",
                 data=None,
             )
+        _ensure_conversation_owner(conv, user)
+        result = svc.get_conversation_with_messages(conversation_id)
         return ApiResponse(data=result)
     finally:
         svc.close()
@@ -162,14 +178,24 @@ async def get_conversation_detail(
 @router.delete("/{conversation_id}", response_model=ApiResponse)
 async def delete_conversation(
     conversation_id: str,
+    user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ApiResponse:
     """删除对话
 
     级联删除该对话下的所有消息。不可恢复。
+    坑⑨：强制登录 + owner 校验，匿名/他人不可删除。
     """
     svc = ConversationService(db)
     try:
+        conv = svc.get_conversation(conversation_id)
+        if not conv:
+            return ApiResponse(
+                code=404,
+                message="对话不存在",
+                data=None,
+            )
+        _ensure_conversation_owner(conv, user)
         deleted = svc.delete_conversation(conversation_id)
         if not deleted:
             return ApiResponse(
@@ -192,7 +218,7 @@ async def send_message(
     conversation_id: str,
     req: SendMessageRequest,
     http_request: Request,
-    user: Optional[dict] = Depends(get_optional_user),
+    user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ApiResponse:
     """在对话中发送新消息（支持多轮上下文）
@@ -223,6 +249,7 @@ async def send_message(
                 message="对话不存在",
                 data=None,
             )
+        _ensure_conversation_owner(conv, user)
 
         # 2. 检查 Agent 是否可用
         from app.core.vanna_instance import vanna_manager
@@ -321,6 +348,9 @@ async def send_message(
                 "summary": result.summary,
                 "truncated": len(result.data) > 100,
                 "masked_columns": result.masked_columns,
+                "retry_count": result.retry_count,
+                "corrections": result.corrections,
+                "chart": result.chart,
             }
         )
     finally:

@@ -169,8 +169,8 @@ app.add_middleware(MetricsMiddleware)
 from app.middleware.rate_limit import RateLimitMiddleware
 app.add_middleware(
     RateLimitMiddleware,
-    query_limit=30,     # /api/v1/query: 30 次/分钟
-    default_limit=60,   # 其他 API: 60 次/分钟
+    query_limit=settings.RATE_LIMIT_QUERY_PER_MINUTE,  # /api/v1/query: 30 次/分钟
+    default_limit=settings.RATE_LIMIT_PER_MINUTE,      # 其他 API: 60 次/分钟
 )
 
 # --- 审计中间件 ---

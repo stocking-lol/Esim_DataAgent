@@ -149,6 +149,13 @@ class AuditMiddleware(BaseHTTPMiddleware):
             "security_blocked": False,
         }
 
+        # 坑④ 修复：SSE 流式响应不得整体缓冲读取，否则首包延迟=整流时长。
+        # 注意：BaseHTTPMiddleware 包装后的 response.media_type 可能为 None，
+        # 必须用 Content-Type 头判断，否则会漏判并整体消费流。
+        content_type = (response.headers.get("content-type") or "").lower()
+        if "text/event-stream" in content_type:
+            return audit_data
+
         try:
             # 读取响应体
             response_body = b""
@@ -222,6 +229,11 @@ class AuditMiddleware(BaseHTTPMiddleware):
             )
         except Exception as e:
             logger.error("Audit middleware failed to write log: %s", e, exc_info=True)
+            try:
+                from app.middleware.metrics import metrics
+                metrics.record_audit_failed()
+            except Exception:
+                pass
 
 
 async def _async_iter(data: list[bytes]):

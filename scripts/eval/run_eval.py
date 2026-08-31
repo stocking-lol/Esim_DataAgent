@@ -254,6 +254,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="eSIM NL2SQL 评估脚本")
     parser.add_argument("--live", action="store_true", help="实时模式（需 Agent 就绪）")
     parser.add_argument("--endpoint", default=None, help="NL2SQL 服务地址（实时模式）")
+    parser.add_argument(
+        "--accuracy-endpoint", default=None,
+        help="坑⑫：评估完成后上报执行准确率的管理端点（如 /api/v1/admin/metrics/accuracy）",
+    )
+    parser.add_argument(
+        "--admin-token", default="",
+        help="管理员 token（配合 --accuracy-endpoint 使用）",
+    )
     args = parser.parse_args()
 
     if not _TEST_SET.exists():
@@ -314,6 +322,27 @@ def main() -> None:
                 print(f"  - {it['id']}: {it['question']}")
     print(f"\n报告已写入: {_REPORT}")
     print(f"耗时: {elapsed}s")
+
+    # 坑⑫：live 模式下把执行准确率上报到平台指标端点
+    if args.live and args.accuracy_endpoint:
+        _push_accuracy(report, args.accuracy_endpoint, args.admin_token)
+
+
+def _push_accuracy(report: dict, endpoint: str, admin_token: str) -> None:
+    """评估结束后把执行准确率写入平台指标端点（坑⑫）。"""
+    try:
+        import httpx
+
+        overall = report.get("overall", {})
+        payload = {"accuracy": round(overall.get("exec_rate", 0.0), 4)}
+        headers = {"Authorization": f"Bearer {admin_token}"} if admin_token else {}
+        resp = httpx.post(endpoint, json=payload, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            print(f"[accuracy] 已上报执行准确率 {payload['accuracy']*100:.1f}% -> {endpoint}")
+        else:
+            print(f"[accuracy] 上报失败: HTTP {resp.status_code} {resp.text[:200]}")
+    except Exception as e:
+        print(f"[accuracy] 上报异常: {e}")
 
 
 if __name__ == "__main__":

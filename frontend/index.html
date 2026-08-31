@@ -1,83 +1,223 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="eSIM 运营数据自然语言查询平台：AI 生成 SQL、四层安全网关、行级权限与列级脱敏、结果可视化。" />
+  <meta name="theme-color" content="#4f46e5" />
   <title>eSIM NL2SQL 智能数据平台</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%234f46e5'/%3E%3Cpath d='M7 8h10M7 12h10M7 16h6' stroke='white' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E" />
   <link rel="preconnect" href="https://cdn.plot.ly" />
   <link rel="stylesheet" href="/frontend/styles.css" />
 </head>
 <body>
-  <!-- 登录遮罩 -->
+  <!-- ===================== SVG 图标库 ===================== -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+    <defs>
+      <g id="s-stroke" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></g>
+      <symbol id="i-sim" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="4" y="3" width="16" height="18" rx="3" />
+        <path d="M9 3v6h6V3M8 13h8M8 17h5" />
+      </symbol>
+      <symbol id="i-send" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 12l16-8-6 16-3-6-7-2z" />
+      </symbol>
+      <symbol id="i-user" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="8" r="3.4" /><path d="M4.5 20c1.4-3.6 4.2-5.4 7.5-5.4s6.1 1.8 7.5 5.4" />
+      </symbol>
+      <symbol id="i-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="4.5" y="10.5" width="15" height="10" rx="2.6" /><path d="M8 10.5V8a4 4 0 018 0v2.5" />
+      </symbol>
+      <symbol id="i-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
+        <path d="M4 7h16M4 12h16M4 17h16" />
+      </symbol>
+      <symbol id="i-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
+        <path d="M6 6l12 12M18 6L6 18" />
+      </symbol>
+      <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M20 14.5A8.5 8.5 0 019.5 4a8.5 8.5 0 1010.5 10.5z" />
+      </symbol>
+      <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="4" />
+        <path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.2 5.2l1.4 1.4M17.4 17.4l1.4 1.4M18.8 5.2l-1.4 1.4M6.6 17.4l-1.4 1.4" />
+      </symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 3l7 3v5.5c0 4.3-2.9 8.2-7 9.5-4.1-1.3-7-5.2-7-9.5V6l7-3z" /><path d="M9.3 12l1.9 1.9 3.5-3.7" />
+      </symbol>
+      <symbol id="i-db" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <ellipse cx="12" cy="6" rx="7.5" ry="3" /><path d="M4.5 6v12c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3V6" /><path d="M4.5 12c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3" />
+      </symbol>
+      <symbol id="i-chart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />
+      </symbol>
+      <symbol id="i-doc" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8l-5-5z" /><path d="M14 3v5h5M9 13h6M9 17h4" />
+      </symbol>
+      <symbol id="i-code" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8.5 8L4.5 12l4 4M15.5 8l4 4-4 4M13.5 5l-3 14" />
+      </symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <path d="M12 5v14M5 12h14" />
+      </symbol>
+      <symbol id="i-cog" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3.2" />
+        <path d="M12 2.8v2.4M12 18.8v2.4M4.5 4.5l1.7 1.7M17.8 17.8l1.7 1.7M2.8 12h2.4M18.8 12h2.4M4.5 19.5l1.7-1.7M17.8 6.2l1.7-1.7" />
+      </symbol>
+      <symbol id="i-logout" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M15 4h3.5A1.5 1.5 0 0120 5.5v13a1.5 1.5 0 01-1.5 1.5H15" /><path d="M10 8l-4 4 4 4M6 12h9" />
+      </symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 7h16M9 7V4.8A.8.8 0 019.8 4h4.4a.8.8 0 01.8.8V7M6.5 7l.8 12.2a1.8 1.8 0 001.8 1.8h5.8a1.8 1.8 0 001.8-1.8L17.5 7" />
+      </symbol>
+      <symbol id="i-spark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z" />
+      </symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M20 11a8 8 0 10-.6 4" /><path d="M20 4.5V11h-6" />
+      </symbol>
+    </defs>
+  </svg>
+
+  <!-- ===================== 登录 ===================== -->
   <div id="login-overlay" class="overlay">
-    <div class="login-card">
-      <div class="brand">
-        <div class="brand-logo">eSIM</div>
-        <h1>NL2SQL 智能数据平台</h1>
-        <p class="subtitle">用自然语言查询你的 eSIM 业务数据库</p>
+    <div class="login-shell">
+      <aside class="login-aside">
+        <div class="aside-brand">
+          <span class="logo-mark"><svg class="ic" style="width:20px;height:20px"><use href="#i-sim" /></svg></span>
+          <div>
+            <b>eSIM NL2SQL</b>
+            <span>Enterprise Data Agent</span>
+          </div>
+        </div>
+        <h2>让业务人员<br />用说话的方式查数据</h2>
+        <p class="aside-sub">无需写 SQL，描述业务问题即可获得可信、可控、可追溯的数据答案。</p>
+        <div class="aside-feats">
+          <div class="aside-feat">
+            <i><svg class="ic"><use href="#i-shield" /></svg></i>
+            <div><b>四层 SQL 安全网关</b><span>输入过滤 · Schema 限制 · SQL 校验 · 结果检查，fail-closed 设计</span></div>
+          </div>
+          <div class="aside-feat">
+            <i><svg class="ic"><use href="#i-db" /></svg></i>
+            <div><b>行级权限 + 列级脱敏</b><span>RLS 自动注入租户过滤，按角色动态屏蔽敏感列</span></div>
+          </div>
+          <div class="aside-feat">
+            <i><svg class="ic"><use href="#i-refresh" /></svg></i>
+            <div><b>失败自动纠错重试</b><span>SQL 执行异常自动分类并回灌 LLM 修复，无需人工介入</span></div>
+          </div>
+        </div>
+      </aside>
+
+      <div class="login-card">
+        <div class="brand">
+          <div class="brand-badge"><svg class="ic"><use href="#i-spark" /></svg> AI 驱动的数据查询</div>
+          <h1>欢迎回来</h1>
+          <p class="subtitle">登录后即可用自然语言查询 eSIM 业务数据库</p>
+        </div>
+        <form id="login-form">
+          <div class="field">
+            <label for="login-username">用户名</label>
+            <span class="field-icon"><svg class="ic"><use href="#i-user" /></svg></span>
+            <input id="login-username" type="text" placeholder="admin" autocomplete="username" />
+          </div>
+          <div class="field">
+            <label for="login-password">密码</label>
+            <span class="field-icon"><svg class="ic"><use href="#i-lock" /></svg></span>
+            <input id="login-password" type="password" placeholder="••••••••" autocomplete="current-password" />
+          </div>
+          <button type="submit" id="login-btn" class="btn-primary block">登录</button>
+          <div id="login-error" class="error-box" hidden></div>
+          <div class="hint">
+            演示账号：<code>admin / esim_admin_2026</code><br />
+            <code>analyst / esim_analyst_2026</code>
+          </div>
+        </form>
       </div>
-      <form id="login-form">
-        <label>用户名
-          <input id="login-username" type="text" placeholder="admin" autocomplete="username" />
-        </label>
-        <label>密码
-          <input id="login-password" type="password" placeholder="••••••••" autocomplete="current-password" />
-        </label>
-        <button type="submit" id="login-btn">登录</button>
-        <div id="login-error" class="error-box" hidden></div>
-        <div class="hint">演示账号：admin / esim_admin_2026 · analyst / esim_analyst_2026</div>
-      </form>
     </div>
   </div>
 
-  <!-- 主应用 -->
+  <!-- ===================== 主应用 ===================== -->
   <div id="app" class="app" hidden>
     <!-- 侧边栏 -->
-    <aside class="sidebar">
+    <aside class="sidebar" id="sidebar">
       <div class="sidebar-head">
-        <span class="logo-small">eSIM</span>
-        <span class="logo-text">NL2SQL</span>
+        <span class="logo-mark"><svg class="ic"><use href="#i-sim" /></svg></span>
+        <div class="logo-txt"><b>eSIM NL2SQL</b><small>智能数据平台</small></div>
+        <button id="sidebar-close" class="icon-btn sidebar-close" title="收起">
+          <svg class="ic"><use href="#i-close" /></svg>
+        </button>
       </div>
-      <button id="new-chat-btn" class="btn-primary block">+ 新建对话</button>
+      <button id="new-chat-btn" class="btn-primary block">
+        <svg class="ic"><use href="#i-plus" /></svg> 新建对话
+      </button>
       <div class="nav-label">对话历史</div>
       <ul id="conv-list" class="conv-list"></ul>
       <div class="sidebar-foot">
-        <button id="admin-btn" class="btn-ghost block" hidden>⚙ 管理面板</button>
-        <button id="settings-btn" class="btn-ghost block">⚙ 设置</button>
+        <button id="admin-btn" class="btn-ghost block" hidden>
+          <svg class="ic"><use href="#i-shield" /></svg> 管理面板
+        </button>
+        <button id="settings-btn" class="btn-ghost block">
+          <svg class="ic"><use href="#i-cog" /></svg> 设置
+        </button>
         <div id="user-box" class="user-box"></div>
-        <button id="logout-btn" class="btn-ghost block">退出登录</button>
+        <button id="logout-btn" class="btn-ghost block">
+          <svg class="ic"><use href="#i-logout" /></svg> 退出登录
+        </button>
       </div>
     </aside>
+    <div id="sidebar-scrim" class="sidebar-scrim" hidden></div>
 
     <!-- 主区域 -->
     <main class="main">
       <header class="topbar">
+        <button id="menu-btn" class="icon-btn" title="菜单">
+          <svg class="ic"><use href="#i-menu" /></svg>
+        </button>
         <div class="topbar-title" id="chat-title">开始提问吧</div>
         <div class="topbar-meta" id="chat-meta"></div>
+        <div class="topbar-actions">
+          <button id="theme-toggle" class="icon-btn" title="切换主题">
+            <svg class="ic ic-moon"><use href="#i-moon" /></svg>
+            <svg class="ic ic-sun"><use href="#i-sun" /></svg>
+          </button>
+        </div>
       </header>
 
       <section id="messages" class="messages">
         <div class="empty-state">
-          <h2>👋 欢迎使用 eSIM NL2SQL 平台</h2>
-          <p>直接输入业务问题，例如：</p>
-        <div class="suggest"><!-- 由 frontend/app.js 的 DEMO_QUESTIONS 动态填充 --></div>
-          <p class="foot">查询由 AI 生成 SQL 并在安全网关（RLS + 列级脱敏）保护下执行。</p>
+          <div class="empty-badge"><svg class="ic"><use href="#i-spark" /></svg> AI 驱动 · 自然语言查数</div>
+          <h2>用一句话查询 eSIM 业务数据</h2>
+          <p>描述你想知道的业务问题，AI 自动生成 SQL，在安全网关（RLS + 列级脱敏）保护下执行，并返回表格与可视化图表。</p>
+          <div class="suggest"><!-- 由 frontend/app.js 的 DEMO_QUESTIONS 动态填充 --></div>
+          <div class="empty-feats">
+            <span><svg class="ic"><use href="#i-shield" /></svg> 四层 SQL 安全网关</span>
+            <span><svg class="ic"><use href="#i-db" /></svg> 行级权限 + 列级脱敏</span>
+            <span><svg class="ic"><use href="#i-refresh" /></svg> 失败自动纠错重试</span>
+          </div>
         </div>
       </section>
 
       <footer class="composer">
-        <textarea id="question-input" rows="1" placeholder="输入你的数据问题，Enter 发送，Shift+Enter 换行"></textarea>
-        <button id="send-btn" class="btn-primary">发送</button>
+        <div class="composer-inner">
+          <textarea id="question-input" rows="1" placeholder="输入你的数据问题，例如：统计各地区的 eSIM 用户数量"></textarea>
+          <div class="composer-row">
+            <span class="composer-hint">Enter 发送 · Shift + Enter 换行</span>
+            <button id="send-btn" class="btn-send" title="发送">
+              <svg class="ic"><use href="#i-send" /></svg>
+            </button>
+          </div>
+        </div>
       </footer>
     </main>
   </div>
 
-  <!-- 管理面板 -->
+  <!-- ===================== 管理面板 ===================== -->
   <div id="admin-overlay" class="overlay" hidden>
     <div class="modal wide">
       <div class="modal-head">
         <h2>管理面板</h2>
-        <button class="close-btn" data-close="admin-overlay">✕</button>
+        <button class="close-btn" data-close="admin-overlay" title="关闭">
+          <svg class="ic"><use href="#i-close" /></svg>
+        </button>
       </div>
       <div class="tabs">
         <button class="tab active" data-tab="stats">训练统计</button>
@@ -92,22 +232,27 @@
     </div>
   </div>
 
-  <!-- 设置 -->
+  <!-- ===================== 设置 ===================== -->
   <div id="settings-overlay" class="overlay" hidden>
     <div class="modal">
       <div class="modal-head">
         <h2>设置</h2>
-        <button class="close-btn" data-close="settings-overlay">✕</button>
+        <button class="close-btn" data-close="settings-overlay" title="关闭">
+          <svg class="ic"><use href="#i-close" /></svg>
+        </button>
       </div>
-      <label>后端 API 地址
+      <div class="field">
+        <label for="api-base-input">后端 API 地址</label>
+        <span class="field-icon"><svg class="ic"><use href="#i-db" /></svg></span>
         <input id="api-base-input" type="text" placeholder="http://localhost:8000" />
-      </label>
-      <label>主题
+      </div>
+      <div>
+        <label for="theme-select">主题</label>
         <select id="theme-select">
           <option value="light">浅色</option>
           <option value="dark">深色</option>
         </select>
-      </label>
+      </div>
       <div class="modal-actions">
         <button id="save-settings-btn" class="btn-primary">保存</button>
       </div>

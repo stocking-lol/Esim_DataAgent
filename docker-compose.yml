@@ -33,8 +33,10 @@ services:
       start_period: 30s
 
   # --- ChromaDB (Vector Store) ---
+  # 应用以 HttpClient 连接本服务（CHROMA_CLIENT_MODE=http）。
+  # 镜像版本必须与 requirements.txt 中的 chromadb SDK 版本一致，否则 API 协议不兼容。
   chromadb:
-    image: chromadb/chroma:latest
+    image: chromadb/chroma:1.5.9
     container_name: esim_chromadb
     restart: unless-stopped
     ports:
@@ -47,7 +49,8 @@ services:
       - ANONYMIZED_TELEMETRY=FALSE
       - ALLOW_RESET=TRUE
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      # chromadb >= 1.x 起 v1 API 已废弃，必须用 v2 路径，否则健康检查永远失败
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v2/heartbeat"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -112,8 +115,6 @@ services:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
       - --storage.tsdb.retention.time=15d
-    depends_on:
-      - fastapi
 
   # --- Grafana (可视化仪表盘) ---
   grafana:

@@ -6,9 +6,15 @@ ChromaDB 训练数据存储层
 架构：
   - 3 个 ChromaDB Collection：ddl / documentation / sql_examples
   - 使用 all-MiniLM-L6-v2 作为 embedding 模型（通过 chromadb 内置支持）
-  - 持久化到本地目录，数据在服务重启后保留
+  - 支持两种客户端模式（settings.CHROMA_CLIENT_MODE）：
+      persistent —— 进程内嵌入式，读写本地目录，仅适用于单副本 / 本地开发
+      http       —— 连接独立 Chroma Server，K8s 多副本下必须使用
+
+多副本（K8s replicas > 1）下若使用 persistent 模式，每个 Pod 会各持一份独立
+数据并永久分叉，且 Pod 重启后数据丢失。详见 docs/pitfalls_chromadb_server.md
 """
 
+import asyncio
 import json
 import logging
 import uuid
@@ -116,13 +122,20 @@ class ChromaTrainingStore:
 
     COLLECTION_NAMES = ["ddl", "documentation", "sql_examples"]
 
+    # 支持的客户端模式，对应 settings.CHROMA_CLIENT_MODE
+    SUPPORTED_MODES = ("persistent", "http")
+
     def __init__(self, persist_dir: Optional[str] = None):
         """
         Args:
-            persist_dir: ChromaDB 持久化目录，默认从 settings 读取
+            persist_dir: ChromaDB 持久化目录（仅 persistent 模式使用），
+                         默认从 settings 读取
         """
         self._persist_dir = persist_dir or settings.CHROMADB_PERSIST_DIR
-        self._client: Optional[chromadb.PersistentClient] = None
+        # 两种客户端（PersistentClient / HttpClient）都实现同一套 Collection API，
+        # 因此统一按基类注解，CRUD 代码无需区分模式
+        self._client = None
+        self._client_mode: str = "persistent"
         self._embedding_fn = None
         self._collections: dict[str, chromadb.Collection] = {}
         self._initialized = False
@@ -132,20 +145,26 @@ class ChromaTrainingStore:
     async def initialize(self) -> None:
         """初始化 ChromaDB 客户端和 Collection
 
+        客户端构造与 collection 建连是阻塞 I/O（http 模式下还要建立 TCP 连接），
+        必须丢进线程池执行，否则会阻塞 FastAPI 事件循环——多副本下这会让并发
+        能力打回单线程，比不改造更慢。详见 docs/pitfalls_chromadb_server.md 坑①。
+
         Raises:
-            RuntimeError: 初始化失败（通常是 embedding 模型下载失败）
+            RuntimeError: 初始化失败（embedding 模型缺失，或 Chroma Server 不可达）
         """
         if self._initialized:
             logger.info("ChromaTrainingStore already initialized.")
             return
 
-        persist_path = Path(self._persist_dir)
-        persist_path.mkdir(parents=True, exist_ok=True)
-
-        logger.info("Initializing ChromaDB at: %s", self._persist_dir)
+        mode = (settings.CHROMA_CLIENT_MODE or "persistent").strip().lower()
+        if mode not in self.SUPPORTED_MODES:
+            raise RuntimeError(
+                f"不支持的 CHROMA_CLIENT_MODE: {mode!r}，"
+                f"可选值为 {list(self.SUPPORTED_MODES)}"
+            )
 
         # 创建 embedding 函数（多级 fallback）
-        # 优先级: ONNX Default → SentenceTransformer → SimpleKeyword
+        # 优先级: ONNX Default → SimpleKeyword
         embedding_fn = self._create_embedding_function()
         if embedding_fn is None:
             raise RuntimeError(
@@ -159,7 +178,68 @@ class ChromaTrainingStore:
         logger.info("Embedding function: %s", type(embedding_fn).__name__)
 
         try:
-            # 创建 PersistentClient
+            await asyncio.to_thread(self._connect, mode)
+
+            self._initialized = True
+            logger.info(
+                "ChromaTrainingStore initialized (%s mode, ddl=%d, doc=%d, sql=%d)",
+                mode,
+                self._collections["ddl"].count(),
+                self._collections["documentation"].count(),
+                self._collections["sql_examples"].count(),
+            )
+
+        except Exception as e:
+            logger.error("Failed to initialize ChromaDB (%s mode): %s", mode, e)
+            # 失败后必须清空状态，否则后续 _ensure_initialized 会误判为可用
+            self._initialized = False
+            self._client = None
+            self._collections.clear()
+
+            detail = str(e) or type(e).__name__
+            hint = (
+                "请确认 Chroma Server 已启动且 CHROMADB_HOST / CHROMADB_PORT 配置正确"
+                if mode == "http"
+                else "请手动下载 all-MiniLM-L6-v2 模型到本地缓存目录"
+            )
+            raise RuntimeError(
+                f"ChromaDB 初始化失败（{mode} 模式）: {detail}。{hint}"
+            ) from e
+
+    def _connect(self, mode: str) -> None:
+        """同步建立客户端与 collection（阻塞 I/O，由 initialize 丢进线程池执行）
+
+        Args:
+            mode: "persistent" —— 进程内嵌入式，读写本地目录
+                  "http"       —— 连接独立 Chroma Server
+
+        Raises:
+            Exception: 连接失败或 collection 创建失败，由 initialize 统一转换
+        """
+        if mode == "http":
+            host, port = settings.CHROMADB_HOST, settings.CHROMADB_PORT
+            logger.info("Connecting to Chroma Server at %s:%s (ssl=%s)",
+                        host, port, settings.CHROMA_HTTP_SSL)
+            try:
+                self._client = chromadb.HttpClient(
+                    host=host,
+                    port=port,
+                    ssl=settings.CHROMA_HTTP_SSL,
+                )
+                # 立即探活：避免带着一个连不上的客户端启动，把故障推迟到首次查询才暴露
+                self._client.heartbeat()
+            except Exception as e:
+                # SDK 抛出的异常常带空消息（如 ConnectionError()），
+                # 这里补全目标地址与异常类型，否则日志里只剩一句无信息量的失败
+                detail = f": {e}" if str(e).strip() else ""
+                raise ConnectionError(
+                    f"无法连接 Chroma Server {host}:{port}"
+                    f"（{type(e).__name__}）{detail}"
+                ) from e
+        else:
+            persist_path = Path(self._persist_dir)
+            persist_path.mkdir(parents=True, exist_ok=True)
+            logger.info("Initializing ChromaDB at: %s", self._persist_dir)
             self._client = chromadb.PersistentClient(
                 path=str(persist_path),
                 settings=ChromaSettings(
@@ -168,28 +248,18 @@ class ChromaTrainingStore:
                 ),
             )
 
-            # 获取或创建 collections（使用 get_or_create 避免重复创建错误）
-            for name in self.COLLECTION_NAMES:
-                collection = self._client.get_or_create_collection(
-                    name=name,
-                    embedding_function=self._embedding_fn,
-                    metadata={"hnsw:space": "cosine"},
-                )
-                self._collections[name] = collection
-                logger.info("Collection '%s' ready (%d docs)",
-                            name, collection.count())
+        # 获取或创建 collections（使用 get_or_create 避免重复创建错误）
+        for name in self.COLLECTION_NAMES:
+            collection = self._client.get_or_create_collection(
+                name=name,
+                embedding_function=self._embedding_fn,
+                metadata={"hnsw:space": "cosine"},
+            )
+            self._collections[name] = collection
+            logger.info("Collection '%s' ready (%d docs)",
+                        name, collection.count())
 
-            self._initialized = True
-            logger.info("ChromaTrainingStore initialized successfully "
-                        "(ddl=%d, doc=%d, sql=%d)",
-                        self._collections["ddl"].count(),
-                        self._collections["documentation"].count(),
-                        self._collections["sql_examples"].count())
-
-        except Exception as e:
-            logger.error("Failed to initialize ChromaDB: %s", e)
-            self._initialized = False
-            raise RuntimeError(f"ChromaDB 初始化失败: {e}") from e
+        self._client_mode = mode
 
     # --- CRUD 操作 ---
 
@@ -452,6 +522,33 @@ class ChromaTrainingStore:
                          question[:50], len(context))
         return context
 
+    # --- 异步包装 ---
+    #
+    # 把同步的检索/统计操作丢进线程池，供 FastAPI 的 async 请求路径调用。
+    # 保留同步原方法不动：train_service、初始化脚本以及既有测试都依赖同步版本。
+    # 详见 docs/pitfalls_chromadb_server.md 坑①
+
+    async def aretrieve_context(self, question: str, max_items: int = 5) -> str:
+        """retrieve_context 的异步版本，查询热路径专用"""
+        return await asyncio.to_thread(self.retrieve_context, question, max_items)
+
+    async def asearch(
+        self, query: str, n_results: int = 5,
+        collection_filter: Optional[list[str]] = None,
+    ) -> dict[str, list[TrainingRecord]]:
+        """search 的异步版本"""
+        return await asyncio.to_thread(
+            self.search, query, n_results, collection_filter
+        )
+
+    async def aget_all(self, record_type: Optional[str] = None) -> list[TrainingRecord]:
+        """get_all 的异步版本"""
+        return await asyncio.to_thread(self.get_all, record_type)
+
+    async def acount_by_type(self) -> dict[str, int]:
+        """count_by_type 的异步版本"""
+        return await asyncio.to_thread(self.count_by_type)
+
     # --- 批量操作 ---
 
     def batch_add_ddl(self, ddl_list: list[str],
@@ -621,6 +718,11 @@ class ChromaTrainingStore:
     @property
     def is_initialized(self) -> bool:
         return self._initialized
+
+    @property
+    def client_mode(self) -> str:
+        """当前客户端模式："persistent" | "http"（未初始化时为 "persistent"）"""
+        return self._client_mode
 
     def _ensure_initialized(self) -> None:
         if not self._initialized or self._client is None:

@@ -15,8 +15,10 @@ SqlTool 的安全设计（本项目自研的差异化能力）：
      这是自研底座能离线跑 54 题评估的关键。
 """
 
+import asyncio
 import logging
 import re
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
 
@@ -127,7 +129,8 @@ class SqlTool:
 
     def __init__(self, dry_run: bool = False) -> None:
         self._dry_run = dry_run
-        self._conn = None  # 懒加载 pymysql 连接
+        self._conn = None  # 懒加载 pymysql 连接（兼容字段）
+        self._local = threading.local()  # 坑⑭：每线程独立连接，配合 to_thread
 
     @property
     def dry_run(self) -> bool:
@@ -173,6 +176,30 @@ class SqlTool:
         # 2. RLS 行级注入（非 admin）
         try:
             rls = rls_service.inject_rls(sql, role=role, mvno_id=mvno_id)
+            if rls.rls_condition == "no mvno_id: access denied (1=0)":
+                # 坑③ 修复：非 admin 无 mvno_id 必须拒绝，不得放行
+                return ToolResult(
+                    success=False,
+                    sql=sql,
+                    blocked=True,
+                    block_reason="当前用户无租户归属（mvno_id），已拒绝访问",
+                    error="当前用户无租户归属（mvno_id），已拒绝访问",
+                    retryable=False,
+                )
+            # 坑⑦：RLS 注入后二次校验（verify_rls），失败即拦截
+            try:
+                ok, reason = rls_service.verify_rls(sql=rls.sql, role=role, mvno_id=mvno_id)
+            except Exception as e:
+                ok, reason = False, f"RLS 校验异常: {e}"
+            if not ok:
+                return ToolResult(
+                    success=False,
+                    sql=sql,
+                    blocked=True,
+                    block_reason=f"RLS 校验失败: {reason}",
+                    error=f"RLS 校验失败: {reason}",
+                    retryable=False,
+                )
             sql = rls.sql
         except Exception as e:
             logger.warning("RLS injection failed (proceed without RLS): %s", e)
@@ -245,10 +272,17 @@ class SqlTool:
     # --- 真实执行（pymysql） ---
 
     async def _real_execute(self, sql: str) -> ToolResult:
-        """连接 MySQL 真实执行（含超时提示 + 行数上限）"""
+        """连接 MySQL 真实执行（含超时提示 + 行数上限）
+
+        坑⑭：同步 DB 调用丢进线程池执行，避免阻塞事件循环。
+        """
+        sql = _add_timeout_hint(sql)
+        return await asyncio.to_thread(self._real_execute_sync, sql)
+
+    def _real_execute_sync(self, sql: str) -> ToolResult:
+        """线程内执行的同步 DB 逻辑（每线程独立连接，避免跨线程共享）"""
         import pymysql
 
-        sql = _add_timeout_hint(sql)
         try:
             conn = self._get_conn()
             with conn.cursor(pymysql.cursors.DictCursor) as cur:
@@ -268,8 +302,9 @@ class SqlTool:
 
     def _get_conn(self):
         import pymysql
-        if self._conn is None or not self._conn.open:
-            self._conn = pymysql.connect(
+        conn = getattr(self._local, "conn", None)
+        if conn is None or not conn.open:
+            conn = pymysql.connect(
                 host=settings.DATABASE_HOST,
                 port=settings.DATABASE_PORT,
                 user=settings.DATABASE_USER,
@@ -279,9 +314,17 @@ class SqlTool:
                 cursorclass=pymysql.cursors.DictCursor,
                 connect_timeout=10,
             )
-        return self._conn
+            self._local.conn = conn
+        return conn
 
     def close(self) -> None:
+        conn = getattr(self._local, "conn", None)
+        if conn is not None and conn.open:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            self._local.conn = None
         if self._conn is not None and self._conn.open:
             try:
                 self._conn.close()

@@ -47,11 +47,20 @@ class Settings(BaseSettings):
         )
 
     # --- ChromaDB (Vector Store for RAG) ---
+    # 客户端模式：
+    #   persistent —— 进程内嵌入式，读写本地目录。仅适用于单副本/本地开发。
+    #   http       —— 连接独立 Chroma Server，多副本(K8s)下必须使用，否则每个 Pod
+    #                 各持一份数据会永久分叉。详见 docs/pitfalls_chromadb_server.md
+    CHROMA_CLIENT_MODE: str = "persistent"
     CHROMADB_PERSIST_DIR: str = str(
         Path(__file__).resolve().parent.parent.parent / "chromadb_data"
     )
     CHROMADB_COLLECTION_NAME: str = "esim_nl2sql_rag"
+    # http 模式专用：Chroma Server 地址。容器内端口固定为 8000。
+    CHROMADB_HOST: str = "localhost"
     CHROMADB_PORT: int = 8001
+    CHROMA_HTTP_SSL: bool = False
+    CHROMA_HTTP_TIMEOUT: int = 30
 
     # --- LLM Configuration (DeepSeek-V3 via OpenAI-compatible API) ---
     LLM_PROVIDER: str = "deepseek"
@@ -69,6 +78,8 @@ class Settings(BaseSettings):
 
     # --- Query Safety ---
     QUERY_TIMEOUT_SECONDS: int = 30
+    # 坑⑲：结果摘要是否启用（摘要是一次额外 LLM 串行调用，可关闭以降低尾延迟）
+    SUMMARY_ENABLED: bool = True
     SLOW_QUERY_THRESHOLD_SECONDS: int = 5
     MAX_QUERY_ROWS: int = 1000
     QUERY_HISTORY_DAYS: int = 90
@@ -78,12 +89,15 @@ class Settings(BaseSettings):
     QUERY_CACHE_TTL_SECONDS: int = 60
     QUERY_CACHE_MAX_SIZE: int = 200
     # 缓存后端：memory（进程内）/ redis（跨实例共享）/ auto（优先 Redis，失败降级内存）
-    QUERY_CACHE_BACKEND: str = "memory"
+    QUERY_CACHE_BACKEND: str = "auto"  # 坑⑮：多副本默认尝试 Redis，失败降级内存
     REDIS_URL: str = "redis://localhost:6379/0"
 
     # --- Rate Limiting ---
     RATE_LIMIT_PER_MINUTE: int = 60
+    RATE_LIMIT_QUERY_PER_MINUTE: int = 30
     RATE_LIMIT_BURST: int = 10
+    # 坑⑬：仅可信代理的 X-Forwarded-For 才被限流中间件采信
+    TRUSTED_PROXY_IPS: list[str] = []
 
     # --- Audit ---
     AUDIT_LOG_ENABLED: bool = True

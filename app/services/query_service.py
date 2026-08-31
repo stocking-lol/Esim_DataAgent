@@ -110,7 +110,9 @@ async def execute_query(
         logger.info("Processing query: '%s'", question[:100])
 
         # 从 ChromaDB 检索训练上下文，增强 Agent 的 SQL 生成能力
-        training_context = vanna_manager.retrieve_context(question)
+        # 异步调用：检索是阻塞 I/O（http 模式下为一次网络往返），
+        # 同步调用会阻塞事件循环，让多副本的并发能力退化
+        training_context = await vanna_manager.aretrieve_context(question)
 
         # --- 多轮对话上下文 ---
         conversation_context = ""
@@ -186,7 +188,8 @@ async def execute_query(
                     break
 
         # 生成自然语言摘要（使用 LLM，替代原始组件文本拼接）
-        if result.data is not None and result.sql and not result.blocked:
+        # 坑⑲：SUMMARY_ENABLED 可关闭，避免串行摘要拉高尾延迟
+        if settings.SUMMARY_ENABLED and result.data is not None and result.sql and not result.blocked:
             try:
                 from app.core.llm import llm_service
                 result.summary = await llm_service.generate_summary(
@@ -226,6 +229,19 @@ async def execute_query(
                 metrics.record_security_block(reason=(result.block_reason or "unknown")[:50])
             except Exception:
                 pass
+
+        # --- 坑⑦：L4 结果检查（result_size_limit），定义后首次接线 ---
+        if result.data and not result.blocked:
+            try:
+                from app.core.sql_security import sql_gateway
+                post_check = sql_gateway.check_result(len(result.data))
+                if not post_check.passed:
+                    result.blocked = True
+                    result.block_reason = post_check.reason
+                    result.error = f"结果检查拦截: {post_check.reason}"
+                    logger.warning("Post check blocked: %s", post_check.reason)
+            except Exception as e:
+                logger.warning("Post check error (allowing): %s", e)
 
         # --- 数据脱敏 ---
         if result.data and not result.blocked:
@@ -418,19 +434,49 @@ async def execute_query_with_retry(
 async def execute_query_stream(
     question: str,
     conversation_id: Optional[str] = None,
+    ip_address: Optional[str] = None,
+    user_id: Optional[int] = None,
+    username: Optional[str] = None,
+    user_role: str = "admin",
+    user_mvno_id: Optional[int] = None,
 ) -> AsyncGenerator[dict, None]:
     """执行自然语言查询（流式 SSE）
 
     使用 Vanna 2.0 Agent 处理查询，逐步 yield SSE 事件。
+    坑⑩ 修复：与普通查询路径对齐 —— 缓存短路、RLS 上下文、数据脱敏、
+    审计、安全拦截事件；输入过滤在 API 层统一完成。
 
     Args:
         question: 用户自然语言问题
         conversation_id: 可选的多轮对话ID
+        ip_address: 请求来源IP（审计）
+        user_id / username / user_role / user_mvno_id: 用户身份（RLS/脱敏/审计）
 
     Yields:
-        dict: SSE 事件 {"type": "status"|"sql"|"data"|"summary"|"done"|"error", "data": ...}
+        dict: SSE 事件 {"type": "status"|"sql"|"data"|"done"|"error", "data": ...}
     """
     start_time = time.perf_counter()
+
+    # --- 坑⑩：缓存短路（key 按 role|mvno|question 隔离，与普通路径一致）---
+    from app.services.query_cache import query_cache
+
+    cached = await query_cache.get(question, user_role, user_mvno_id)
+    if cached is not None:
+        elapsed = round((time.perf_counter() - start_time) * 1000, 2)
+        yield {"type": "status", "data": "命中查询缓存"}
+        if cached.data:
+            yield {"type": "data", "data": cached.data, "columns": cached.columns}
+        yield {"type": "sql", "data": cached.sql}
+        yield {
+            "type": "done",
+            "data": {
+                "execution_time_ms": elapsed,
+                "sql_generated": bool(cached.sql),
+                "data_returned": bool(cached.data),
+                "cached": True,
+            },
+        }
+        return
 
     if not vanna_manager.is_initialized:
         yield {"type": "error", "data": "Vanna Agent 未初始化"}
@@ -439,12 +485,23 @@ async def execute_query_stream(
     agent = vanna_manager.agent
     request_context = vanna_manager.create_request_context()
 
+    # --- 坑⑩：设置 RLS 用户上下文（请求级 ContextVar）---
+    if vanna_manager._run_sql_tool:
+        vanna_manager._run_sql_tool.set_user_context(user_role, user_mvno_id)
+
+    stream_sql = ""
+    stream_data: list[dict[str, Any]] = []
+    stream_columns: list[str] = []
+    stream_error: Optional[str] = None
+    stream_blocked = False
+    stream_block_reason = ""
+
     try:
         # 状态：开始处理
         yield {"type": "status", "data": "正在分析问题..."}
 
-        # 从 ChromaDB 检索训练上下文
-        training_context = vanna_manager.retrieve_context(question)
+        # 从 ChromaDB 检索训练上下文（异步，避免阻塞事件循环）
+        training_context = await vanna_manager.aretrieve_context(question)
         if training_context:
             augmented_question = (
                 f"请根据以下业务知识和数据库信息回答问题。\n\n"
@@ -466,27 +523,112 @@ async def execute_query_stream(
 
             if extracted["type"] == "sql":
                 sql_found = True
+                stream_sql = extracted["content"]
                 yield {"type": "sql", "data": extracted["content"]}
 
             elif extracted["type"] == "data":
                 data_found = True
-                yield {
-                    "type": "data",
-                    "data": extracted["data"],
-                    "columns": extracted["columns"],
-                }
+                rows = extracted["data"]
+                cols = extracted["columns"]
+                # 坑⑩：流式路径与普通路径一致的数据脱敏
+                try:
+                    from app.services.masking_service import masking_service
+                    rows, _ = masking_service.mask_query_result(
+                        rows, cols, role=user_role
+                    )
+                except Exception as e:
+                    logger.warning("Stream masking error: %s", e)
+                stream_data = rows
+                stream_columns = cols
+                yield {"type": "data", "data": rows, "columns": cols}
 
             elif extracted["type"] == "text":
                 yield {"type": "status", "data": extracted["content"]}
 
             elif extracted["type"] == "error":
+                stream_error = extracted["content"]
                 yield {"type": "error", "data": extracted["content"]}
+
+        # 安全拦截状态（来自 CapturingRunSqlTool，坑⑩ 与普通路径对等）
+        if vanna_manager._run_sql_tool and vanna_manager._run_sql_tool.last_blocked:
+            stream_blocked = True
+            stream_block_reason = vanna_manager._run_sql_tool.last_block_reason
+            try:
+                from app.middleware.metrics import metrics
+                metrics.record_security_block(
+                    reason=(stream_block_reason or "unknown")[:50]
+                )
+            except Exception:
+                pass
+            yield {
+                "type": "error",
+                "data": f"SQL 被安全网关拦截: {stream_block_reason}",
+            }
 
         # 完成
         elapsed = (time.perf_counter() - start_time) * 1000
 
-        if not sql_found and not data_found:
+        if (
+            not sql_found
+            and not data_found
+            and not stream_blocked
+            and not stream_error
+        ):
             yield {"type": "error", "data": "Agent 未返回有效结果"}
+
+        # 坑⑩：流式路径审计（中间件对 SSE 不再重复读取 body）
+        result = QueryResult(
+            question=question,
+            sql=stream_sql,
+            data=stream_data,
+            columns=stream_columns,
+            row_count=len(stream_data),
+            execution_time_ms=round(elapsed, 2),
+            conversation_id=conversation_id,
+            error=stream_error,
+            blocked=stream_blocked,
+            block_reason=stream_block_reason,
+        )
+        audit_status = (
+            "blocked" if stream_blocked else ("error" if stream_error else "success")
+        )
+        _audit_log(
+            result, audit_status, ip_address, user_id, username,
+            user_role=user_role, user_mvno_id=user_mvno_id,
+        )
+
+        # 写入缓存（仅成功且有 SQL）
+        if not stream_blocked and not stream_error and stream_sql:
+            try:
+                await query_cache.put(question, user_role, user_mvno_id, result)
+            except Exception as e:
+                logger.warning("Query cache put error: %s", e)
+
+        # 坑⑯：流式路径同样保存会话（携带 conversation_id 时）
+        if conversation_id:
+            try:
+                from app.services.conversation_service import ConversationService
+                conv_svc = ConversationService()
+                conv_svc.save_query_turn(
+                    conversation_id=conversation_id,
+                    question=question,
+                    sql=stream_sql,
+                    data_summary=(
+                        "查询完成"
+                        if not stream_error and not stream_blocked
+                        else "查询失败"
+                    ),
+                    row_count=len(stream_data),
+                    execution_time_ms=round(elapsed, 2),
+                    sql_status=audit_status,
+                    error_message=(
+                        stream_error
+                        or (stream_block_reason if stream_blocked else None)
+                    ),
+                )
+                conv_svc.close()
+            except Exception as e:
+                logger.warning("Failed to save stream conversation turn: %s", e)
 
         yield {
             "type": "done",
@@ -494,13 +636,18 @@ async def execute_query_stream(
                 "execution_time_ms": round(elapsed, 2),
                 "sql_generated": sql_found,
                 "data_returned": data_found,
+                "blocked": stream_blocked,
+                "cached": False,
             },
         }
 
     except Exception as e:
         logger.error("Stream query failed: %s", e, exc_info=True)
         yield {"type": "error", "data": str(e)}
-
+    finally:
+        # 重置 RLS 用户上下文（请求级 ContextVar）
+        if vanna_manager._run_sql_tool:
+            vanna_manager._run_sql_tool.reset_user_context()
 
 def _audit_log(
     result: QueryResult,
@@ -545,8 +692,14 @@ def _audit_log(
                 ip_address or "unknown",
                 result.sql,
             )
-    except Exception:
-        pass  # 审计日志失败不影响主流程
+    except Exception as e:
+        # 坑⑪：审计失败不再完全静默 —— 记录错误日志与指标，便于发现 schema drift 等问题
+        logger.error("Audit log write failed: %s", e)
+        try:
+            from app.middleware.metrics import metrics
+            metrics.record_audit_failed()
+        except Exception:
+            pass
 
 
 def _extract_from_component(component: UiComponent) -> dict:

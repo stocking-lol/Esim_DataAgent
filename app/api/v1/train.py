@@ -5,11 +5,13 @@
 提升 NL2SQL 查询的准确率。
 """
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+from app.core.auth import require_admin
 
 from app.services import train_service
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_admin)])
 
 
 # ============================================================

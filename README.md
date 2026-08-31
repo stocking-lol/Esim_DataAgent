@@ -6,7 +6,7 @@
 
 eSIM NL2SQL 平台是一个面向 eSIM 运营数据查询场景的自然语言到 SQL（NL2SQL）查询系统。用户可用自然语言提问（如"本月新增多少 eSIM 用户"），平台自动生成 SQL、执行查询、返回结构化结果，并支持多轮对话追问。
 
-系统的安全能力以**可验证**的方式落地，而非口号：内置四层 SQL 安全网关、行级租户隔离（RLS）与自我纠错回路，并通过 **269 项自动化测试**（其中 **75 个 SQL 注入 / Prompt 注入 / fail-closed 攻防用例**）持续验证；安全网关对解析/校验失败采取 **fail-closed（默认拦截）** 策略。详见下方「安全设计」「演示用例」「技术选型」与「质量指标」章节。
+系统的安全能力以**可验证**的方式落地，而非口号：内置四层 SQL 安全网关、行级租户隔离（RLS）与自我纠错回路，并通过 **327 项自动化测试**（当前 `pytest --collect-only -q` 实测收集数）（其中 **75 个 SQL 注入 / Prompt 注入 / fail-closed 攻防用例**）持续验证；安全网关对解析/校验失败采取 **fail-closed（默认拦截）** 策略。详见下方「安全设计」「演示用例」「技术选型」与「质量指标」章节。
 
 ### 核心能力
 
@@ -201,7 +201,7 @@ esim-nl2sql-platform/
 │   └── utils/
 │       ├── errors.py              # 统一异常处理
 │       └── crypto.py              # bcrypt 密码加密
-├── tests/                         # 测试套件（269 项）
+├── tests/                         # 测试套件（327 项）
 ├── scripts/
 │   ├── init_db.sql                # eSIM 数据库建表
 │   ├── seed_data.sql              # 测试数据
@@ -264,7 +264,7 @@ python scripts/demo.py --feature security
 
 | 维度 | 数值 / 说明 |
 |------|------|
-| 自动化测试 | **269 项**（pytest），其中 **75 个 SQL 注入 / Prompt 注入 / fail-closed 攻防用例**（绝大多数 AI 项目接近于零测试） |
+| 自动化测试 | **327 项**（pytest，`pytest --collect-only -q` 可复现），其中 **75 个 SQL 注入 / Prompt 注入 / fail-closed 攻防用例**（绝大多数 AI 项目接近于零测试） |
 | 安全网关策略 | **fail-closed**：SQL 解析/校验失败时默认**拦截**而非放行（见 `test_security.py::TestFailClosed`） |
 | 评估基准 | **54 题**（7 类 × 3 难度）黄金 SQL 测试集，输出 Execution Accuracy + Exact Match |
 | 执行准确率（EA，前 20 题） | 规则基线 65% · 纯 LLM 直出 95% · 自研 Mini Agent **100%** · Vanna 95% |
@@ -287,7 +287,7 @@ python scripts/demo.py --feature security
 |------|------|------|------|------|
 | 执行准确率 EA | 65% | 95% | **100%** | **100%** |
 | 精确匹配 EM | 0% | 0% | **5%** | 0% |
-| 自愈触发率（首轮失败→自愈修正成功占比） | 无 | 0% | **15%** | 0% |
+| 自愈触发率（首轮失败→自愈修正成功占比） | 无 | 0% | **16.7±2.9%** | 0% |
 | 上下文策略 | 模板 | 全量硬塞 | RAG 动态检索 | RAG 动态检索 |
 | 推理成本 | 0 | 每次 1 次 LLM | 每次 1-2 次 LLM | 每次若干 LLM 调用 |
 
@@ -296,8 +296,8 @@ python scripts/demo.py --feature security
 > （实测 Mini Agent EA **100.0±0.0%**、自愈率 **16.7±2.9%**，`scripts/eval/compare_report3.json` 可复跑复核）。
 
 **三路对比的关键结论（Agent 架构的增量价值）：**
-- **纯 LLM 直出 vs 自研 Mini Agent**：同一 LLM，仅差「RAG 检索 + 工具校验 + 自愈循环」，EA 95% → 100%，且 Mini Agent 有 **15% 的题首轮出错后靠自愈纠错成功**（纯 LLM 出错即败）。
-- **Vanna vs 自研 Mini Agent（自愈机制实测对比）**：两者最终 EA 均为 100%，但**自愈触发率不同**——Vanna 首轮即 100% 正确（触发率 0%，自愈能力存在但未触发，说明其 few-shot/提示工程使首轮质量更高）；Mini Agent 首轮 85% + 自愈 15% 兜底至 100%（证明自愈闭环是把「首轮失败」转化为「最终成功」的安全网）。两套架构的自愈回路均由 `error_classifier`（9 类错误）驱动，区别只在触发频率。
+- **纯 LLM 直出 vs 自研 Mini Agent**：同一 LLM，仅差「RAG 检索 + 工具校验 + 自愈循环」，EA 95% → 100%，且 Mini Agent 有 **16.7±2.9% 的题首轮出错后靠自愈纠错成功**（纯 LLM 出错即败）。
+- **Vanna vs 自研 Mini Agent（自愈机制实测对比）**：两者最终 EA 均为 100%，但**自愈触发率不同**——Vanna 首轮即 100% 正确（触发率 0%，自愈能力存在但未触发，说明其 few-shot/提示工程使首轮质量更高）；Mini Agent 首轮 ~83.3% + 自愈 16.7% 兜底至 100%（证明自愈闭环是把「首轮失败」转化为「最终成功」的安全网）。两套架构的自愈回路均由 `error_classifier`（9 类错误）驱动，区别只在触发频率。
 - **自研 Mini Agent 修正好「纯 LLM 修不了的题」**：如「查询所有已激活的用户档案」，纯 LLM 直出把"用户档案"误映射到 `users` 表；Mini Agent 通过 RAG 混合检索命中业务文档与 few-shot 示例，再经自愈循环（3 次重试）修正到 `esim_profiles`。
 - **为什么自研版仍选 Vanna 做生产底座**：自研版验证了 Agent 架构的核心闭环（工程上约 800 行即可复现），但 Vanna 提供更成熟的多轮对话、插件体系与生态；**自研版的价值是架构验证 + 对比实验，用数据反哺选型**——这正是 Agent 项目的工程素养。
 
@@ -330,7 +330,7 @@ python -m pytest tests/ -v
 python -m pytest tests/test_query.py::test_conversation_crud -v
 ```
 
-测试覆盖（269 项），按模块分组：
+测试覆盖（327 项），按模块分组：
 
 **基础能力**
 - 认证流程（登录、me、错误密码、注册、更新资料）

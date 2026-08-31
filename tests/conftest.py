@@ -114,13 +114,50 @@ def db_session():
 
 @pytest.fixture(autouse=True)
 def cleanup_conversations(db_session):
-    """每个测试后清理对话数据"""
-    yield
-    # 清理测试创建的对话
+    """每个测试后清理**测试自己创建的**对话数据
+
+    历史教训（2026-08-31）：
+        这个 fixture 原来直接执行 ``query(Conversation).delete()``，
+        等于**清空整张表**。而它又是 autouse 的，于是每跑一次 pytest，
+        开发环境里用户真实创建的对话（连同消息）会被全部抹掉——
+        且不可恢复（除非有备份或从 query_audit_log 反推）。
+
+    现在的做法：测试开始前对已存在的对话 id 做快照，结束后只删除
+    「本次新增」的部分。既保证测试之间互不污染，又不会误伤存量数据。
+    """
     from app.models.conversation import Conversation, ConversationMessage
-    db_session.query(ConversationMessage).delete()
-    db_session.query(Conversation).delete()
-    db_session.commit()
+
+    # 快照：测试开始前就存在的对话，一律视为存量数据，绝不删除
+    pre_existing = {row[0] for row in db_session.query(Conversation.id).all()}
+
+    yield
+
+    try:
+        # 必须先结束快照时开启的事务。
+        # MySQL 默认隔离级别是 REPEATABLE READ：若沿用同一个事务去查，
+        # 将看不到其他会话（API 请求、其他 fixture）在此期间插入的行，
+        # 导致 created_ids 恒为空、测试脏数据残留。
+        db_session.commit()
+
+        q = db_session.query(Conversation.id)
+        if pre_existing:
+            q = q.filter(Conversation.id.notin_(pre_existing))
+        created_ids = [row[0] for row in q.all()]
+
+        if not created_ids:
+            db_session.rollback()
+            return
+
+        db_session.query(ConversationMessage).filter(
+            ConversationMessage.conversation_id.in_(created_ids)
+        ).delete(synchronize_session=False)
+        db_session.query(Conversation).filter(
+            Conversation.id.in_(created_ids)
+        ).delete(synchronize_session=False)
+        db_session.commit()
+    except Exception:  # pragma: no cover - 清理失败不应让测试误报
+        db_session.rollback()
+        raise
 
 
 # --- 工具函数 ---

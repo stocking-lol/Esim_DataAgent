@@ -26,21 +26,21 @@ spec:
           # 存活探针：进程活着但可能已不可服务
           livenessProbe:
             httpGet:
-              path: /healthz
+              path: /health
               port: http
             initialDelaySeconds: 15
             periodSeconds: 20
           # 就绪探针：流量只打到可服务的副本
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /health
               port: http
             initialDelaySeconds: 10
             periodSeconds: 10
           # 启动探针：给 ChromaDB 加载训练数据留时间
           startupProbe:
             httpGet:
-              path: /healthz
+              path: /health
               port: http
             failureThreshold: 30
             periodSeconds: 5

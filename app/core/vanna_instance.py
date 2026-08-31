@@ -6,6 +6,7 @@ Vanna 2.0 采用 Agent-based 架构，通过 send_message() 处理自然语言�
 """
 
 import asyncio
+import contextvars
 import logging
 import random
 from typing import Any, AsyncGenerator, Dict, Optional
@@ -160,6 +161,14 @@ class ResilientOpenAILlmService(OpenAILlmService):
 
 # --- 自定义 RunSqlTool（捕获生成的 SQL） ---
 
+# 请求级 RLS 上下文与捕获状态（ContextVar：并发异步请求各自隔离，坑② 修复）
+_rls_role_var: "contextvars.ContextVar[str]" = contextvars.ContextVar("rls_role", default="admin")
+_rls_mvno_var: "contextvars.ContextVar[Any]" = contextvars.ContextVar("rls_mvno", default=None)
+_last_sql_var: "contextvars.ContextVar[str]" = contextvars.ContextVar("captured_last_sql", default="")
+_last_blocked_var: "contextvars.ContextVar[bool]" = contextvars.ContextVar("captured_last_blocked", default=False)
+_last_block_reason_var: "contextvars.ContextVar[str]" = contextvars.ContextVar("captured_last_block_reason", default="")
+
+
 class CapturingRunSqlTool(RunSqlTool):
     """扩展 RunSqlTool，捕获 LLM 生成的 SQL 语句并执行安全校验 + RLS 注入
 
@@ -183,40 +192,57 @@ class CapturingRunSqlTool(RunSqlTool):
 
     @property
     def last_sql(self) -> str:
-        """获取最近一次执行的 SQL"""
-        return self._last_sql
+        """获取最近一次执行的 SQL（请求级 ContextVar 优先）"""
+        return _last_sql_var.get() or self._last_sql
 
     @property
     def last_blocked(self) -> bool:
-        """最近一次 SQL 是否被安全网关拦截"""
-        return self._last_blocked
+        """最近一次 SQL 是否被安全网关拦截（请求级 ContextVar 优先）"""
+        return _last_blocked_var.get() or self._last_blocked
 
     @property
     def last_block_reason(self) -> str:
-        """最近一次拦截原因"""
-        return self._last_block_reason
+        """最近一次拦截原因（请求级 ContextVar 优先）"""
+        return _last_block_reason_var.get() or self._last_block_reason
 
     def set_user_context(self, role: str, mvno_id: Any) -> None:
         """设置当前查询的用户上下文（用于 RLS）
 
-        Args:
-            role: 用户角色 (admin/analyst/viewer)
-            mvno_id: 用户所属 MVNO ID
+        使用 ContextVar 保存：并发异步请求各自持有独立上下文，
+        避免共享单例字段被其他请求覆盖（坑② 修复）。
         """
+        _rls_role_var.set(role)
+        _rls_mvno_var.set(mvno_id)
         self._current_role = role
         self._current_mvno_id = mvno_id
 
     def reset_user_context(self) -> None:
-        """重置用户上下文为默认值（admin）"""
+        """重置用户上下文与捕获状态为默认值"""
+        _rls_role_var.set("admin")
+        _rls_mvno_var.set(None)
+        _last_sql_var.set("")
+        _last_blocked_var.set(False)
+        _last_block_reason_var.set("")
         self._current_role = "admin"
         self._current_mvno_id = None
+        self._last_sql = ""
+        self._last_blocked = False
+        self._last_block_reason = ""
 
     async def execute(self, context: ToolContext, args: RunSqlToolArgs) -> ToolResult:
         """执行 SQL 并捕获 SQL 语句，执行前进行安全校验 + RLS 注入"""
+        # 读取请求级 RLS 上下文（ContextVar，随任务隔离）
+        role = _rls_role_var.get()
+        mvno_id = _rls_mvno_var.get()
+        self._current_role = role
+        self._current_mvno_id = mvno_id
         # 捕获 SQL 语句
         self._last_sql = args.sql if hasattr(args, 'sql') else ""
         self._last_blocked = False
         self._last_block_reason = ""
+        _last_sql_var.set(self._last_sql)
+        _last_blocked_var.set(False)
+        _last_block_reason_var.set("")
         logger.debug("Captured SQL: %s", self._last_sql[:200])
 
         # --- SQL 安全网关校验 ---
@@ -227,6 +253,8 @@ class CapturingRunSqlTool(RunSqlTool):
                 # SQL 被拦截，不执行
                 self._last_blocked = True
                 self._last_block_reason = check_result.reason
+                _last_blocked_var.set(True)
+                _last_block_reason_var.set(check_result.reason)
                 logger.warning(
                     "SQL BLOCKED by %s: %s | SQL: %.200s",
                     check_result.layer, check_result.reason, self._last_sql,
@@ -256,12 +284,15 @@ class CapturingRunSqlTool(RunSqlTool):
                     # 如果 args 不可变，创建新的
                     pass
                 self._last_sql = check_result.sql_after_check
+                _last_sql_var.set(self._last_sql)
 
         except Exception as e:
             # 安全校验子系统自身故障：FAIL-CLOSED —— 宁可阻断，不可在未经验证下执行 SQL
             logger.error("SQL security check FAILED (fail-closed, blocking): %s", e)
             self._last_blocked = True
             self._last_block_reason = f"安全校验子系统异常，默认拦截: {e}"
+            _last_blocked_var.set(True)
+            _last_block_reason_var.set(self._last_block_reason)
             return ToolResult(
                 success=False,
                 result_for_llm=(
@@ -277,19 +308,64 @@ class CapturingRunSqlTool(RunSqlTool):
             from app.services.rls_service import rls_service
             rls_result = rls_service.inject_rls(
                 sql=self._last_sql,
-                role=self._current_role,
-                mvno_id=self._current_mvno_id,
+                role=role,
+                mvno_id=mvno_id,
             )
             if rls_result.rls_applied:
                 logger.info(
                     "RLS injected: tables=%s, condition=%s",
                     rls_result.rls_tables, rls_result.rls_condition,
                 )
+                if rls_result.rls_condition == "no mvno_id: access denied (1=0)":
+                    # 坑③ 修复：非 admin 用户无租户归属，必须拒绝而不是放行
+                    self._last_blocked = True
+                    self._last_block_reason = "当前用户无租户归属（mvno_id），已拒绝访问"
+                    _last_blocked_var.set(True)
+                    _last_block_reason_var.set(self._last_block_reason)
+                    return ToolResult(
+                        success=False,
+                        result_for_llm=(
+                            "访问被拒绝：当前账号未绑定运营商（mvno_id），"
+                            "无法查询业务数据。请联系管理员绑定租户后重试。"
+                        ),
+                        error=self._last_block_reason,
+                        metadata={
+                            "blocked": True,
+                            "layer": "rls",
+                            "reason": self._last_block_reason,
+                        },
+                    )
+                # 坑⑦：RLS 注入后二次校验（verify_rls），失败即拦截
+                try:
+                    ok, reason = rls_service.verify_rls(
+                        sql=self._last_sql, role=role, mvno_id=mvno_id
+                    )
+                except Exception as e:
+                    ok, reason = False, f"RLS 校验异常: {e}"
+                if not ok:
+                    self._last_blocked = True
+                    self._last_block_reason = f"RLS 校验失败: {reason}"
+                    _last_blocked_var.set(True)
+                    _last_block_reason_var.set(self._last_block_reason)
+                    return ToolResult(
+                        success=False,
+                        result_for_llm=(
+                            f"SQL 安全拦截：{self._last_block_reason}\n"
+                            f"该 SQL 语句已被安全网关阻止执行。"
+                        ),
+                        error=self._last_block_reason,
+                        metadata={
+                            "blocked": True,
+                            "layer": "rls_verify",
+                            "reason": self._last_block_reason,
+                        },
+                    )
                 try:
                     args.sql = rls_result.sql
                 except Exception:
                     pass
                 self._last_sql = rls_result.sql
+                _last_sql_var.set(self._last_sql)
         except Exception as e:
             logger.warning("RLS injection error (allowing without RLS): %s", e)
 
@@ -304,6 +380,7 @@ class CapturingRunSqlTool(RunSqlTool):
                 except Exception:
                     pass
                 self._last_sql = timed_sql
+                _last_sql_var.set(self._last_sql)
         except Exception as e:
             logger.debug("Failed to add timeout hint: %s", e)
 
@@ -493,6 +570,34 @@ class VannaAgentManager:
 
         try:
             context = chroma_store.retrieve_context(question, max_items=max_items)
+            if context:
+                logger.debug("Retrieved %d chars of training context", len(context))
+            return context
+        except Exception as e:
+            logger.warning("Failed to retrieve training context: %s", e)
+            return ""
+
+    async def aretrieve_context(self, question: str, max_items: int = 5) -> str:
+        """retrieve_context 的异步版本，供 FastAPI async 请求路径调用
+
+        内部把阻塞的检索操作丢进线程池，避免阻塞事件循环。http 模式下检索
+        是一次网络往返，同步调用会让多副本的并发能力退化。
+        详见 docs/pitfalls_chromadb_server.md 坑①。
+
+        Args:
+            question: 用户自然语言问题
+            max_items: 每个 collection 检索的最大数量
+
+        Returns:
+            str: 拼接后的上下文文本。ChromaDB 不可用时返回空字符串。
+        """
+        if not self.chroma_available:
+            return ""
+
+        try:
+            context = await chroma_store.aretrieve_context(
+                question, max_items=max_items
+            )
             if context:
                 logger.debug("Retrieved %d chars of training context", len(context))
             return context
