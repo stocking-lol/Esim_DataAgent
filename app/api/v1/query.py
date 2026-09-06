@@ -20,10 +20,20 @@ from sse_starlette.sse import EventSourceResponse
 from app.services.query_service import execute_query, execute_query_with_retry, execute_query_stream
 from app.core.vanna_instance import vanna_manager
 from app.core.auth import get_optional_user
+from app.utils.json_encoder import dumps_json
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["NL2SQL Query"])
+
+
+def _sse_data(payload: dict) -> str:
+    """统一的 SSE 数据序列化入口
+
+    必须走 dumps_json 而非裸 json.dumps：MySQL DECIMAL 列返回 Decimal，
+    标准编码器会抛 TypeError 并中断整条流（详见 app/utils/json_encoder.py）。
+    """
+    return dumps_json(payload)
 
 
 # --- 请求/响应模型 ---
@@ -270,13 +280,13 @@ async def natural_language_query_stream(
             ):
                 yield {
                     "event": event["type"],
-                    "data": json.dumps(event, ensure_ascii=False),
+                    "data": _sse_data(event),
                 }
         except Exception as e:
             logger.error("SSE stream error: %s", e)
             yield {
                 "event": "error",
-                "data": json.dumps({"type": "error", "data": str(e)}, ensure_ascii=False),
+                "data": _sse_data({"type": "error", "data": str(e)}),
             }
 
     # 坑⑪：流式路径由 execute_query_stream 在 service 层审计，中间件不重复
@@ -297,5 +307,5 @@ async def _error_generator(message: str):
     """生成 SSE 错误事件"""
     yield {
         "event": "error",
-        "data": json.dumps({"type": "error", "data": message}, ensure_ascii=False),
+        "data": _sse_data({"type": "error", "data": message}),
     }

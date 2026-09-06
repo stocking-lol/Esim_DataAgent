@@ -125,8 +125,11 @@ class RedisCacheBackend(CacheBackend):
     def _serialize(result: object) -> str:
         # 延迟导入避免与 query_service 循环依赖
         from app.services.query_service import QueryResult
+        from app.utils.json_encoder import dumps_json
         data = asdict(result) if isinstance(result, QueryResult) else result
-        return json.dumps(data, ensure_ascii=False, default=str)
+        # 必须用 dumps_json 而非 default=str：后者会把 DECIMAL 金额 19.90
+        # 序列化成字符串 "19.90"，缓存回读后前端无法按数值排序或绘图
+        return dumps_json(data)
 
     @staticmethod
     def _deserialize(raw: str) -> object:
