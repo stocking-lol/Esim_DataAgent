@@ -201,6 +201,18 @@ if _FRONTEND_DIR.is_dir():
         """根路径返回前端单页应用。"""
         return FileResponse(_FRONTEND_DIR / "index.html")
 
+    # 坑⑳：开发期前端改动必须立即可见——禁止浏览器启发式缓存旧版 app.js。
+    # 不带 Cache-Control 时 Chrome 会按 last-modified 启发式缓存，用户可能一直
+    # 跑修复前的 JS（表现为"代码改了前端还是老行为"）。no-cache 保证每次
+    # 刷新都回源用 ETag 校验，文件变化即返回新版。
+    @app.middleware("http")
+    async def no_cache_frontend(request, call_next):
+        response = await call_next(request)
+        path = request.url.path
+        if path == "/" or path.startswith("/frontend"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
     app.mount(
         "/frontend",
         StaticFiles(directory=str(_FRONTEND_DIR), html=True),
