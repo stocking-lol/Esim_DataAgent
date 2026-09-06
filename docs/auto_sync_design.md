@@ -513,19 +513,37 @@ TRAINING_STALE          = Counter("training_examples_stale_total", "失效清理
 
 ## 7. 实施路线图
 
-| 阶段 | 内容 | 依赖 | 风险 |
-|---|---|---|---|
-| **P0** | ChromaDB 改 Server 模式 + PVC | 无 | 中（需回归全部 RAG 测试） |
-| **P0** | Redis 分布式锁工具（`app/core/dist_lock.py`）+ 单测 | Redis 已就绪 | 低 |
-| **P1** | `sync_ddl` + 漂移检测报告 | P0 | 低 |
-| **P1** | 快照表 `training_snapshot` + 回滚 API | 无 | 低 |
-| **P2** | `harvest_sql`（质量门 + 去重 + 安全校验） | P1 | 中（污染风险，需灰度） |
-| **P2** | 第一层（写入去重）+ 第五层（失效检测） | P1 | 低 |
-| **P3** | `prune_examples`：第二层模板去重 + 第三层评分 | P2 | 中（需评估集验证效果） |
-| **P3** | 第四层冷热分层 | P3 | 低 |
-| **P3** | Prometheus 指标 + 告警规则 | P1 | 低 |
+| 阶段 | 内容 | 依赖 | 风险 | 状态 |
+|---|---|---|---|---|
+| **P0** | ChromaDB 改 Server 模式 + PVC | 无 | 中（需回归全部 RAG 测试） | ✅ 已完成 |
+| **P0** | Redis 分布式锁工具（`app/core/dist_lock.py`）+ 单测 | Redis 已就绪 | 低 | ✅ 已完成（21 项测试） |
+| **P1** | `sync_ddl` + 漂移检测报告 | P0 | 低 | ✅ 已完成（`app/services/ddl_sync_service.py` + `scripts/sync_ddl.py`，20 项测试） |
+| **P1** | 快照表 `training_snapshot` + 回滚 API | 无 | 低 | 🔵 待做 |
+| **P2** | `harvest_sql`（质量门 + 去重 + 安全校验） | P1 | 中（污染风险，需灰度） | 🔵 待做 |
+| **P2** | 第一层（写入去重）+ 第五层（失效检测） | P1 | 低 | 🔵 待做 |
+| **P3** | `prune_examples`：第二层模板去重 + 第三层评分 | P2 | 中（需评估集验证效果） | 🔵 待做 |
+| **P3** | 第四层冷热分层 | P3 | 低 | 🔵 待做 |
+| **P3** | Prometheus 指标 + 告警规则 | P1 | 低 | 🔵 待做 |
+| — | APScheduler 调度器接入（`sync_ddl` 每小时等） | P0（锁） | 低 | 🔵 待做 |
 
-**建议先做 P0 + P1**：这两个阶段解决"知识库与数据库脱钩"的核心问题，风险可控，且能立刻消掉当前已存在的 6 处索引漂移。P2/P3 涉及知识库写入，建议配合 54 题评估集做 A/B 验证（`scripts/eval/compare_eval3.py --trials 3`）确认准确率不降再全量。
+**P0 + P1 已完成**：`sync_ddl` 首次运行即检出并修复了 5 张表共 8 个索引的漂移
+（`add_performance_indexes.sql` 新增的索引此前一直没进知识库），复检 7 张表全部一致。
+
+**P2/P3 涉及知识库写入**，建议配合 54 题评估集做 A/B 验证
+（`scripts/eval/compare_eval3.py --trials 3`）确认准确率不降再全量。
+
+### 实施过程中的关键修正：DDL 比对必须语义化
+
+最初用字符串规范化比对，**全部 7 张表都报漂移**（100% 误报）。原因：训练库里是
+手写摘要版 DDL（`id INT AUTO_INCREMENT PRIMARY KEY`、无反引号、无 COLLATE），
+而 MySQL `SHOW CREATE TABLE` 是精确版（``` `id` int NOT NULL AUTO_INCREMENT```、
+带 COLLATE 和 DEFAULT）。两者语义等价，文本差异极大。
+
+改为 **sqlglot 解析 AST 提取「列名→类型」+ 正则提取索引名** 后：
+operators / roaming_packages 正确判定为一致，只有真正新增索引的 5 张表报漂移。
+
+这个教训的通用形式：**检测类工具如果误报率过高，会迅速被人忽略，
+等同于没有检测。** 宁可比对粒度粗一点，也要保证报出来的都是真问题。
 
 ---
 
