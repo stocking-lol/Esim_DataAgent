@@ -868,3 +868,47 @@ def test_docs_use_unified_self_healing_rate():
                  "docs/vanna_architecture_resume.md"):
         text = (_project_root() / name).read_text(encoding="utf-8")
         assert "16.7±2.9%" in text, f"{name} 缺少统一自愈率口径"
+
+# ============================================================
+# 坑⑳ SSE CRLF 分帧 + Vanna 内部 UI 组件过滤
+# ============================================================
+
+def test_frontend_crlf_frame_normalization():
+    """前端必须以 CRLF 规整后再分帧（后端 sse_starlette 按标准输出 \r\n\r\n）。
+
+    回归护栏：曾经用 buf.indexOf("\\n\\n") 直接切帧，而 \r\n\r\n 中间是 \n\r，
+    永远匹配不到连续两个 \n → 前端 0 帧解析，提问恒显示"无结果"。
+    """
+    js = (_project_root() / "frontend" / "app.js").read_text(encoding="utf-8")
+    assert ".replace(/\\r\\n/g" in js, "缺少 \\r\\n -> \\n 规整，SSE 事件永远无法分帧"
+
+
+def test_frontend_filters_vanna_ui_noise_status():
+    """前端 status 分支必须过滤 Vanna 内部组件 repr（id='vanna- 等）。"""
+    js = (_project_root() / "frontend" / "app.js").read_text(encoding="utf-8")
+    assert "id='vanna-" in js, "前端缺少 Vanna 内部组件噪音过滤"
+
+
+def test_extract_component_skips_ui_but_keeps_data():
+    """组件分类器：Vanna 内部 UI 组件→skip，数据组件→data，不能误杀。"""
+    from app.services.query_service import _extract_from_component
+    from vanna.components.rich import DataFrameComponent
+    from vanna.core.components import UiComponent
+
+    def make(rich):
+        # model_construct 跳过 pydantic 类型校验（mock 类非 RichComponent 子类）
+        return UiComponent.model_construct(rich_component=rich, simple_component=None)
+
+    # 内部 UI 组件（动态类名模拟，不必触发 pydantic 必填校验）
+    ui_comp = type("StatusBarUpdateComponent", (), {})()
+    assert _extract_from_component(make(ui_comp))["type"] == "skip"
+
+    # repr 特征路径：类名不在名单但 repr 含 id='vanna-
+    class FakeUI:
+        pass
+    FakeUI.__repr__ = lambda self: "id='vanna-status-bar' status='working'"
+    assert _extract_from_component(make(FakeUI()))["type"] == "skip"
+
+    # 数据组件绝不能被误杀
+    df = DataFrameComponent(rows=[{"a": 1}], columns=["a"])
+    assert _extract_from_component(make(df))["type"] == "data"

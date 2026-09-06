@@ -14,6 +14,7 @@ Vanna 2.0 Agent 返回 UiComponent 流：
 
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Optional
@@ -719,13 +720,27 @@ def _extract_from_component(component: UiComponent) -> dict:
         rich = component.rich_component
         simple = component.simple_component
 
-        # 调试：记录组件类型
+        # 跳过 Vanna Agent 内部 UI 状态组件（避免污染摘要/上下文）
+        # 两层判断：类型名精确匹配 + repr 特征匹配。类名可能随 Vanna 版本变化，
+        # 但内部 UI 组件的 repr 恒含 id='vanna-... 固定前缀（status_bar / task_tracker /
+        # chat_input），而数据/文本组件的 id 是 UUID，可用 id='vanna- 精确区分。
+        # 注意：不能匹配 ComponentType./ComponentLifecycle——那是所有 RichComponent
+        # 的通用 repr 结构，会把 DataFrameComponent 等真实数据组件一并误杀。
         comp_type = type(rich).__name__ if rich else (type(simple).__name__ if simple else "None")
         logger.debug("Component type: %s", comp_type)
-
-        # 跳过 Vanna Agent 内部 UI 状态组件（避免污染摘要/上下文）
-        skip_types = {"StatusBarUpdate", "ChatInputUpdate", "StatusBar", "ChatInput"}
-        if comp_type in skip_types:
+        skip_types = {
+            "StatusBarUpdate", "ChatInputUpdate", "StatusBar", "ChatInput",
+            "TaskTrackerUpdate", "TaskTracker", "StatusCard",
+            "StatusBarUpdateComponent", "ChatInputUpdateComponent",
+            "TaskTrackerUpdateComponent", "StatusCardComponent",
+        }
+        comp_repr = (
+            str(rich) if rich is not None else (str(simple) if simple is not None else "")
+        )
+        if comp_type in skip_types or (
+            comp_repr
+            and re.search(r"id='vanna-|TaskOperation\.", comp_repr)
+        ):
             return {"type": "skip"}
 
         # --- 处理 rich_component ---

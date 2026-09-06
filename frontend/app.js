@@ -173,7 +173,10 @@
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      buf += decoder.decode(value, { stream: true });
+      // 坑⑱：SSE 标准事件以 CRLF 分帧（\r\n\r\n）。若直接 indexOf("\n\n")，
+      // 永远匹配不到（\r\n\r\n 中间是 \n\r），导致 0 帧解析、提问永远显示
+      // "无结果"。先规整 \r\n -> \n，再按 \n\n 切帧。以后端输出为准。
+      buf += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
       let idx;
       while ((idx = buf.indexOf("\n\n")) >= 0) {
         const frame = buf.slice(0, idx);
@@ -420,7 +423,12 @@
       await streamQuestion(q, (ev) => {
         const d = ev.data || {};
         if (ev.event === "status") {
-          setStatus(d.data || "处理中…");
+          // 过滤后端偶发的 Vanna 内部 UI 组件 repr（id='vanna-...' / <ComponentType...>），
+          // 只展示干净的状态文本（"正在分析问题..."等自然语言）。
+          const txt = (d.data || "").trim();
+          if (txt && !/id='vanna-|ComponentType|ComponentLifecycle|<TaskOperation|status='(working|idle)'/.test(txt)) {
+            setStatus(txt);
+          }
         } else if (ev.event === "sql") {
           if (thinking) thinking.remove();
           bubble.appendChild(sqlCard(d.data || ""));
