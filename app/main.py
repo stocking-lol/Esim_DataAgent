@@ -39,6 +39,24 @@ logger = logging.getLogger("app.main")
 
 
 # ============================================================
+# 日志基础配置
+# ============================================================
+# 此前项目从未配置日志：root logger 无 handler 且有效级别为 WARNING(NOTSET 继承)，
+# 所有 app.* 模块的 logger.info 全部丢失（SSE 流内部事件、查询帧构成等无从排查）。
+# 这里把 root 提升到 INFO；若无 handler 则补一个 StreamHandler（stderr），
+# 使 app.* 日志与 uvicorn 访问日志一并落到 stderr（即 uvicorn 重定向的日志文件）。
+_root_logger = logging.getLogger()
+if _root_logger.level == logging.NOTSET or _root_logger.level > logging.INFO:
+    _root_logger.setLevel(logging.INFO)
+if not _root_logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    )
+    _root_logger.addHandler(_handler)
+
+
+# ============================================================
 # 应用生命周期管理
 # ============================================================
 

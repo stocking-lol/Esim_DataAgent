@@ -268,6 +268,9 @@ async def natural_language_query_stream(
 
 
     async def event_generator():
+        # 每次流式请求的帧构成统计：排查"前端无结果/流中断"时
+        # 可从日志确认后端实际发出了哪些帧（status/sql/data/error/done）。
+        frame_counts: dict = {}
         try:
             async for event in execute_query_stream(
                 question=request.question,
@@ -278,16 +281,24 @@ async def natural_language_query_stream(
                 user_role=user["role"] if user else "viewer",
                 user_mvno_id=user.get("mvno_id") if user else None,
             ):
+                t = event["type"]
+                frame_counts[t] = frame_counts.get(t, 0) + 1
                 yield {
                     "event": event["type"],
                     "data": _sse_data(event),
                 }
         except Exception as e:
             logger.error("SSE stream error: %s", e)
+            frame_counts["error"] = frame_counts.get("error", 0) + 1
             yield {
                 "event": "error",
                 "data": _sse_data({"type": "error", "data": str(e)}),
             }
+        finally:
+            logger.info(
+                "SSE frames question=%r conv=%s frames=%s",
+                request.question[:60], request.conversation_id, frame_counts,
+            )
 
     # 坑⑪：流式路径由 execute_query_stream 在 service 层审计，中间件不重复
     http_request.state._audit_logged_by_service = True
