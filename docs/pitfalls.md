@@ -81,10 +81,14 @@
 
 ### 坑⑦ L4 结果检查与 RLS 二次校验定义了但从未接线
 
-**修复记录（✅ 2026-09-01）**：
+**修复记录（✅ 2026-09-01，✅ 2026-09-25 补齐流式路径）**：
 - `app/services/query_service.py`：`execute_query()` 结果返回前调用 `sql_gateway.check_result(len(result.data))`，超限即 blocked。
 - `app/core/vanna_instance.py` / `app/core/mini_agent/tools.py`：RLS 注入后调用 `rls_service.verify_rls()`，失败即拦截。
-- 验收：`test_execute_query_applies_post_check`、`test_mini_sql_tool_verifies_rls` 通过。
+- **2026-09-25 补齐**：`execute_query_stream()` 的 data 分支在 yield 前同样执行 `check_result`，
+  超限则置 `stream_blocked` 并 yield error（**不发出超限数据**）。
+  此前流式路径仅有 SQL 层 LIMIT 一层防护，两条路径防御深度不一致。
+- 验收：`test_execute_query_applies_post_check`、`test_mini_sql_tool_verifies_rls`、
+  `test_stream_applies_l4_result_check` 通过。
 
 ---
 
@@ -104,10 +108,18 @@
 
 ### 坑⑩ 流式路径功能/安全不对等
 
-**修复记录（✅ 2026-09-01）**：
+**修复记录（✅ 2026-09-01，✅ 2026-09-25 深度对齐）**：
 - `app/services/query_service.py`：`execute_query_stream` 对齐普通路径——缓存短路（key 隔离）、RLS 上下文（ContextVar）、数据脱敏、审计、安全拦截事件、结果缓存写入、会话保存。
 - `app/api/v1/query.py`：流式端点补 API 层输入过滤（置于 Agent 初始化检查之前）。
-- 验收：`test_stream_endpoint_input_filter`、`test_execute_query_stream_applies_rls_and_masking` 通过。
+- `app/api/v1/conversation.py`：会话追问端点补 `user_role` / `user_mvno_id` 透传
+  （此前漏传，服务层默认 admin → viewer 用户可经该路径绕过 RLS 与脱敏）。
+- `app/services/query_service.py`：流式 `masked_columns` 不再丢弃（原 `rows, _ =`），
+  贯通至 `QueryResult` 并写入审计表 `query_audit_log.masked_columns`（脱敏留痕可追溯）。
+- 服务层默认角色由 `admin` 收紧为 `viewer`（`execute_query` / `execute_query_with_retry` /
+  `execute_query_stream` / `_audit_log` 四处），消除"漏传即提权"。
+- 验收：`test_stream_endpoint_input_filter`、`test_execute_query_stream_applies_rls_and_masking`、
+  `test_conversation_message_endpoint_passes_role_and_mvno`、`test_stream_masked_columns_reach_audit`、
+  `test_service_layer_default_role_is_viewer`、`test_audit_table_supports_masked_columns` 通过。
 
 ---
 

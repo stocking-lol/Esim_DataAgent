@@ -6,7 +6,7 @@
 
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -15,6 +15,34 @@ from app.config.database import get_raw_db
 from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+# query_audit_log.masked_columns 列的可用性缓存（None=未探测）。
+# 该列通过 scripts/init_db.sql 与 scripts/migrations/ 的幂等 ALTER 引入；
+# 老库未执行 ALTER 时自动退回不含该列的 INSERT，保证审计绝不因缺列而丢失。
+# 注意：ALTER 后需重启服务使缓存失效（模块级缓存）。
+_MASKED_COL_SUPPORT: Optional[bool] = None
+
+
+def _supports_masked_columns(db: Session) -> bool:
+    """探测 query_audit_log 是否已有 masked_columns 列（结果缓存）"""
+    global _MASKED_COL_SUPPORT
+    if _MASKED_COL_SUPPORT is None:
+        try:
+            found = db.execute(
+                text(
+                    "SELECT COUNT(*) FROM information_schema.COLUMNS "
+                    "WHERE TABLE_SCHEMA = DATABASE() "
+                    "AND TABLE_NAME = 'query_audit_log' "
+                    "AND COLUMN_NAME = 'masked_columns'"
+                )
+            ).scalar()
+            _MASKED_COL_SUPPORT = bool(found)
+            logger.info(
+                "Audit masked_columns column support: %s", _MASKED_COL_SUPPORT)
+        except Exception as e:
+            logger.warning("Detect masked_columns column failed: %s", e)
+            _MASKED_COL_SUPPORT = False
+    return _MASKED_COL_SUPPORT
 
 
 class AuditService:
@@ -33,6 +61,7 @@ class AuditService:
         ip_address: Optional[str] = None,
         conversation_id: Optional[str] = None,
         security_blocked: bool = False,
+        masked_columns: Optional[List[str]] = None,
     ) -> None:
         """记录一条查询审计日志
 
@@ -48,40 +77,76 @@ class AuditService:
             ip_address: 请求来源IP
             conversation_id: 对话ID
             security_blocked: 是否被安全网关拦截
+            masked_columns: 本次查询被脱敏的列（用于事后追溯"哪些字段被脱敏"）
         """
         if not settings.AUDIT_LOG_ENABLED:
             return
 
+        # 脱敏列序列化（逗号分隔，兼容旧库无该列的情况）
+        masked_str: Optional[str] = None
+        if masked_columns:
+            masked_str = ",".join(str(c) for c in masked_columns)[:512]
+
         try:
             db: Session = get_raw_db()
             try:
-                db.execute(
-                    text("""
-                        INSERT INTO query_audit_log
-                            (user_id, username, question, generated_sql,
-                             execution_status, error_message,
-                             execution_time_ms, row_count, ip_address,
-                             conversation_id, security_blocked)
-                        VALUES
-                            (:user_id, :username, :question, :generated_sql,
-                             :execution_status, :error_message,
-                             :execution_time_ms, :row_count, :ip_address,
-                             :conversation_id, :security_blocked)
-                    """),
-                    {
-                        "user_id": user_id,
-                        "username": username,
-                        "question": question[:65535],
-                        "generated_sql": (generated_sql or "")[:65535],
-                        "execution_status": execution_status,
-                        "error_message": (error_message or "")[:65535] if error_message else None,
-                        "execution_time_ms": execution_time_ms,
-                        "row_count": row_count,
-                        "ip_address": ip_address,
-                        "conversation_id": conversation_id,
-                        "security_blocked": 1 if security_blocked else 0,
-                    },
-                )
+                if masked_str is not None and _supports_masked_columns(db):
+                    db.execute(
+                        text("""
+                            INSERT INTO query_audit_log
+                                (user_id, username, question, generated_sql,
+                                 execution_status, error_message,
+                                 execution_time_ms, row_count, ip_address,
+                                 conversation_id, security_blocked, masked_columns)
+                            VALUES
+                                (:user_id, :username, :question, :generated_sql,
+                                 :execution_status, :error_message,
+                                 :execution_time_ms, :row_count, :ip_address,
+                                 :conversation_id, :security_blocked, :masked_columns)
+                        """),
+                        {
+                            "user_id": user_id,
+                            "username": username,
+                            "question": question[:65535],
+                            "generated_sql": (generated_sql or "")[:65535],
+                            "execution_status": execution_status,
+                            "error_message": (error_message or "")[:65535] if error_message else None,
+                            "execution_time_ms": execution_time_ms,
+                            "row_count": row_count,
+                            "ip_address": ip_address,
+                            "conversation_id": conversation_id,
+                            "security_blocked": 1 if security_blocked else 0,
+                            "masked_columns": masked_str,
+                        },
+                    )
+                else:
+                    db.execute(
+                        text("""
+                            INSERT INTO query_audit_log
+                                (user_id, username, question, generated_sql,
+                                 execution_status, error_message,
+                                 execution_time_ms, row_count, ip_address,
+                                 conversation_id, security_blocked)
+                            VALUES
+                                (:user_id, :username, :question, :generated_sql,
+                                 :execution_status, :error_message,
+                                 :execution_time_ms, :row_count, :ip_address,
+                                 :conversation_id, :security_blocked)
+                        """),
+                        {
+                            "user_id": user_id,
+                            "username": username,
+                            "question": question[:65535],
+                            "generated_sql": (generated_sql or "")[:65535],
+                            "execution_status": execution_status,
+                            "error_message": (error_message or "")[:65535] if error_message else None,
+                            "execution_time_ms": execution_time_ms,
+                            "row_count": row_count,
+                            "ip_address": ip_address,
+                            "conversation_id": conversation_id,
+                            "security_blocked": 1 if security_blocked else 0,
+                        },
+                    )
                 db.commit()
                 logger.debug("Audit log saved: status=%s, rows=%d", execution_status, row_count)
             finally:

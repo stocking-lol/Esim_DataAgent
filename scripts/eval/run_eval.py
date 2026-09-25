@@ -123,7 +123,12 @@ def _live_collect_sql(question: str, endpoint: str | None) -> dict:
         if not vanna_manager.is_initialized:
             return {"sql": "", "blocked": False, "error": "agent_not_initialized", "source": "inproc"}
         from app.services.query_service import execute_query
-        result = __import__("asyncio").run(execute_query(question=question))
+        # 评估需要全量数据基线：显式以 admin 身份执行。
+        # 服务层默认角色已收紧为 viewer（最小权限），不显式指定会被 RLS 过滤 + 脱敏，
+        # 导致评估结果与真实分布不符。
+        result = __import__("asyncio").run(
+            execute_query(question=question, user_role="admin", user_mvno_id=None)
+        )
         return {"sql": result.sql, "blocked": result.blocked,
                 "error": result.error, "source": "inproc"}
     except Exception as e:

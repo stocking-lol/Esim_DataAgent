@@ -284,12 +284,17 @@ async def send_message(
             ip_address = http_request.client.host if http_request.client else "unknown"
 
         # 4. 执行查询（query_service 内部已集成多轮上下文加载）
+        # 坑⑩ 修复：必须透传角色与租户，否则 RLS / 脱敏在此路径失效
+        # （历史缺陷：此处漏传 user_role/user_mvno_id，服务层默认 admin，
+        #   导致 viewer 用户可经本接口拿到全量未脱敏数据）
         result = await execute_query(
             question=req.question,
             conversation_id=conversation_id,
             ip_address=ip_address,
             user_id=user["user_id"] if user else None,
             username=user["username"] if user else None,
+            user_role=user["role"] if user else "viewer",
+            user_mvno_id=user.get("mvno_id") if user else None,
         )
 
         # 5. 保存问答到对话历史

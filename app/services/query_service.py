@@ -54,7 +54,7 @@ async def execute_query(
     ip_address: Optional[str] = None,
     user_id: Optional[int] = None,
     username: Optional[str] = None,
-    user_role: str = "admin",
+    user_role: str = "viewer",
     user_mvno_id: Optional[int] = None,
 ) -> QueryResult:
     """执行自然语言查询（非流式）
@@ -305,7 +305,7 @@ async def execute_query_with_retry(
     ip_address: Optional[str] = None,
     user_id: Optional[int] = None,
     username: Optional[str] = None,
-    user_role: str = "admin",
+    user_role: str = "viewer",
     user_mvno_id: Optional[int] = None,
     max_retries: int = 2,
 ) -> QueryResult:
@@ -438,7 +438,7 @@ async def execute_query_stream(
     ip_address: Optional[str] = None,
     user_id: Optional[int] = None,
     username: Optional[str] = None,
-    user_role: str = "admin",
+    user_role: str = "viewer",
     user_mvno_id: Optional[int] = None,
 ) -> AsyncGenerator[dict, None]:
     """执行自然语言查询（流式 SSE）
@@ -493,6 +493,7 @@ async def execute_query_stream(
     stream_sql = ""
     stream_data: list[dict[str, Any]] = []
     stream_columns: list[str] = []
+    stream_masked_columns: list[str] = []   # 被脱敏的列（与非流式路径对齐）
     stream_error: Optional[str] = None
     stream_blocked = False
     stream_block_reason = ""
@@ -532,13 +533,39 @@ async def execute_query_stream(
                 rows = extracted["data"]
                 cols = extracted["columns"]
                 # 坑⑩：流式路径与普通路径一致的数据脱敏
+                # 坑⑳ 修复：保留 masked_columns（原实现用 `rows, _ =` 丢弃，
+                #   导致流式路径无法追溯哪些列被脱敏）
                 try:
                     from app.services.masking_service import masking_service
-                    rows, _ = masking_service.mask_query_result(
+                    rows, masked_cols = masking_service.mask_query_result(
                         rows, cols, role=user_role
                     )
+                    stream_masked_columns = list(masked_cols or [])
+                    if stream_masked_columns:
+                        logger.info(
+                            "Stream masked columns: %s (role=%s)",
+                            stream_masked_columns, user_role,
+                        )
                 except Exception as e:
                     logger.warning("Stream masking error: %s", e)
+                # 坑⑦ 修复：流式路径补齐 L4 结果检查（result_size_limit），
+                #   原实现仅非流式路径调用 check_result，导致两条路径防御深度不一致。
+                #   必须在 yield data 之前校验：一旦发出，前端已渲染，无法收回。
+                try:
+                    from app.core.sql_security import sql_gateway
+                    post_check = sql_gateway.check_result(len(rows))
+                    if not post_check.passed:
+                        stream_blocked = True
+                        stream_block_reason = post_check.reason
+                        logger.warning(
+                            "Stream post check blocked: %s", post_check.reason)
+                        yield {
+                            "type": "error",
+                            "data": f"结果检查拦截: {post_check.reason}",
+                        }
+                        continue  # 不发出超限数据
+                except Exception as e:
+                    logger.warning("Stream post check error (allowing): %s", e)
                 stream_data = rows
                 stream_columns = cols
                 yield {"type": "data", "data": rows, "columns": cols}
@@ -589,6 +616,7 @@ async def execute_query_stream(
             error=stream_error,
             blocked=stream_blocked,
             block_reason=stream_block_reason,
+            masked_columns=stream_masked_columns,
         )
         audit_status = (
             "blocked" if stream_blocked else ("error" if stream_error else "success")
@@ -656,7 +684,7 @@ def _audit_log(
     ip_address: Optional[str] = None,
     user_id: Optional[int] = None,
     username: Optional[str] = None,
-    user_role: str = "admin",
+    user_role: str = "viewer",
     user_mvno_id: Optional[int] = None,
 ) -> None:
     """写入审计日志（静默失败，不影响主流程）"""
@@ -673,6 +701,8 @@ def _audit_log(
             username=username,
             ip_address=ip_address,
             conversation_id=result.conversation_id,
+            # 坑⑳：脱敏列一并留痕，便于事后追溯"哪些字段被脱敏"
+            masked_columns=result.masked_columns,
         )
 
         # 记录 RLS 上下文到日志

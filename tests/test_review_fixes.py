@@ -912,3 +912,201 @@ def test_extract_component_skips_ui_but_keeps_data():
     # 数据组件绝不能被误杀
     df = DataFrameComponent(rows=[{"a": 1}], columns=["a"])
     assert _extract_from_component(make(df))["type"] == "data"
+
+
+# ============================================================
+# 坑㉑ 权限链路闭环：默认角色 / 会话路径透传 / 流式 L4 / 脱敏留痕
+# ============================================================
+
+def test_service_layer_default_role_is_viewer():
+    """服务层默认角色必须是最保守的 viewer。
+
+    回归护栏：历史默认值为 "admin"，任何内部调用（脚本/新调用方）漏传角色
+    即获得最高权限（全量数据 + 不脱敏），违反最小权限原则。
+    """
+    import inspect
+    import app.services.query_service as qs
+
+    targets = (
+        qs.execute_query,
+        qs.execute_query_with_retry,
+        qs.execute_query_stream,
+        qs._audit_log,
+    )
+    for fn in targets:
+        default = inspect.signature(fn).parameters["user_role"].default
+        assert default == "viewer", f"{fn.__name__} 的默认角色是 {default!r}，应为 'viewer'"
+
+
+@pytest.mark.asyncio
+async def test_conversation_message_endpoint_passes_role_and_mvno(client, monkeypatch):
+    """会话追问端点必须透传 role/mvno_id。
+
+    回归护栏：该端点历史漏传两个参数，服务层默认 admin，
+    导致 viewer 用户可经此路径拿到全量未脱敏数据（绕过 RLS 与脱敏）。
+    """
+    import app.api.v1.conversation as conv_api
+    from app.core.auth import JWTManager
+    from app.services.query_service import QueryResult
+
+    captured = {}
+
+    async def fake_execute_query(**kwargs):
+        captured.update(kwargs)
+        return QueryResult(question=kwargs["question"])
+
+    monkeypatch.setattr(conv_api, "execute_query", fake_execute_query)
+    # conversation 模块在函数内部导入 vanna_manager，需 patch 单例本身
+    from app.core.vanna_instance import vanna_manager
+    monkeypatch.setattr(vanna_manager, "_initialized", True)
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"username": "analyst", "password": "esim_analyst_2026"},
+    )
+    token = login.json()["data"]["access_token"]
+    payload = JWTManager.verify_token(token)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    created = await client.post(
+        "/api/v1/conversation", json={"title": "透传回归"}, headers=headers)
+    conv_id = created.json()["data"]["conversation"]["id"]
+
+    resp = await client.post(
+        f"/api/v1/conversation/{conv_id}/messages",
+        json={"question": "本月新增多少eSIM用户"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert captured["user_role"] == payload["role"]
+    assert captured["user_mvno_id"] == payload["mvno_id"]
+
+
+@pytest.mark.asyncio
+async def test_stream_applies_l4_result_check(monkeypatch):
+    """流式路径必须与非流式一致地执行 L4 结果检查；超限时拦截且不发出数据。
+
+    回归护栏：原实现仅在非流式路径调用 check_result，
+    流式仅依赖 SQL 层 LIMIT 一层，两条路径防御深度不一致。
+    """
+    import app.services.query_service as qs
+    from app.core import vanna_instance as vi
+    from app.core.sql_security import sql_gateway
+    from app.services.query_cache import query_cache
+    from types import SimpleNamespace
+
+    query_cache.clear()
+
+    class FakeTool:
+        last_blocked = False
+        last_block_reason = ""
+
+        def set_user_context(self, role, mvno):
+            pass
+
+        def reset_user_context(self):
+            pass
+
+    class RichData:
+        rows = [{"a": 1}, {"a": 2}]
+        columns = ["a"]
+
+    class Comp:
+        def __init__(self, rich=None):
+            self.rich_component = rich
+            self.simple_component = None
+
+    async def fake_send(request_context, message, conversation_id):
+        yield Comp(rich=RichData())
+
+    async def fake_retrieve(question, max_items=5):
+        return ""
+
+    monkeypatch.setattr(vi.vanna_manager, "_initialized", True)
+    monkeypatch.setattr(
+        vi.VannaAgentManager, "agent", property(lambda self: SimpleNamespace(send_message=fake_send)))
+    monkeypatch.setattr(qs.vanna_manager, "create_request_context", lambda: {})
+    monkeypatch.setattr(qs.vanna_manager, "aretrieve_context", fake_retrieve)
+    monkeypatch.setattr(qs.vanna_manager, "_run_sql_tool", FakeTool())
+    monkeypatch.setattr(qs.vanna_manager, "get_last_sql", lambda: "SELECT 1")
+    # L4 判定为不通过
+    monkeypatch.setattr(
+        sql_gateway, "check_result",
+        lambda n: SimpleNamespace(passed=False, reason="结果行数超限(测试)"))
+
+    events = []
+    async for ev in qs.execute_query_stream("查询数据", user_role="admin"):
+        events.append(ev)
+
+    types = [e["type"] for e in events]
+    assert "data" not in types, "被 L4 拦截后不得发出数据事件"
+    errs = [e for e in events if e["type"] == "error"]
+    assert errs and "结果检查拦截" in errs[0]["data"], "缺少 L4 拦截的 error 事件"
+    done = [e for e in events if e["type"] == "done"][0]
+    assert done["data"]["blocked"] is True, "done 事件应标记 blocked"
+
+
+@pytest.mark.asyncio
+async def test_stream_masked_columns_reach_audit(monkeypatch):
+    """流式路径的 masked_columns 必须保留并进入审计（原实现用 `rows, _ =` 丢弃）。"""
+    import app.services.query_service as qs
+    from app.core import vanna_instance as vi
+    from app.services.query_cache import query_cache
+    from types import SimpleNamespace
+
+    query_cache.clear()
+
+    class FakeTool:
+        last_blocked = False
+        last_block_reason = ""
+
+        def set_user_context(self, role, mvno):
+            pass
+
+        def reset_user_context(self):
+            pass
+
+    class RichData:
+        rows = [{"phone_number": "13800005678"}]
+        columns = ["phone_number"]
+
+    class Comp:
+        def __init__(self, rich=None):
+            self.rich_component = rich
+            self.simple_component = None
+
+    async def fake_send(request_context, message, conversation_id):
+        yield Comp(rich=RichData())
+
+    async def fake_retrieve(question, max_items=5):
+        return ""
+
+    audited = []
+
+    def fake_audit_log(result, *args, **kwargs):
+        audited.append(result)
+
+    monkeypatch.setattr(vi.vanna_manager, "_initialized", True)
+    monkeypatch.setattr(
+        vi.VannaAgentManager, "agent", property(lambda self: SimpleNamespace(send_message=fake_send)))
+    monkeypatch.setattr(qs.vanna_manager, "create_request_context", lambda: {})
+    monkeypatch.setattr(qs.vanna_manager, "aretrieve_context", fake_retrieve)
+    monkeypatch.setattr(qs.vanna_manager, "_run_sql_tool", FakeTool())
+    monkeypatch.setattr(qs.vanna_manager, "get_last_sql", lambda: "SELECT 1")
+    monkeypatch.setattr(qs, "_audit_log", fake_audit_log)
+
+    async for _ in qs.execute_query_stream("查询手机号", user_role="analyst", user_mvno_id=3):
+        pass
+
+    assert audited, "审计未被调用"
+    assert "phone_number" in audited[0].masked_columns, "流式路径未保留 masked_columns"
+
+
+def test_audit_table_supports_masked_columns():
+    """审计表需具备 masked_columns 列（迁移 scripts/migrate_audit_columns.py 已执行）。"""
+    from sqlalchemy import inspect
+
+    from app.config.database import db_manager
+
+    cols = {c["name"] for c in inspect(db_manager._engine).get_columns("query_audit_log")}
+    assert "masked_columns" in cols, "query_audit_log 缺少 masked_columns 列，请执行迁移脚本"

@@ -234,6 +234,7 @@ CREATE TABLE IF NOT EXISTS query_audit_log (
     ip_address      VARCHAR(45)     DEFAULT NULL COMMENT '请求IP',
     conversation_id VARCHAR(36)     DEFAULT NULL COMMENT '对话ID',
     security_blocked INT            NOT NULL DEFAULT 0 COMMENT '是否被安全网关拦截: 0=否, 1=是',
+    masked_columns  VARCHAR(512)    DEFAULT NULL COMMENT '本次查询被脱敏的列（逗号分隔，便于事后追溯）',
     created_at      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '记录时间',
 
     INDEX idx_user_id (user_id),

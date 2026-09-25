@@ -5,6 +5,10 @@ Day 12 引入了 conversation_id 与 security_blocked 两个字段（代码层�
 但早期 init_db.sql 创建的表未包含这两列，导致审计日志写入静默失败。
 本脚本检测并补齐这两个列，保证代码与数据库 schema 一致。
 
+后续补充（坑⑳ 脱敏元数据闭环）：
+- masked_columns：记录本次查询被脱敏的列，便于事后追溯"哪些字段被脱敏"。
+  未执行本迁移时，audit_service 会自动退回不含该列的 INSERT（审计不丢失）。
+
 用法：
     python scripts/migrate_audit_columns.py
 """
@@ -32,6 +36,7 @@ def migrate() -> None:
         needed = {
             "conversation_id": "VARCHAR(36) DEFAULT NULL COMMENT '对话ID'",
             "security_blocked": "INT NOT NULL DEFAULT 0 COMMENT '是否被安全网关拦截: 0=否, 1=是'",
+            "masked_columns": "VARCHAR(512) DEFAULT NULL COMMENT '本次查询被脱敏的列（逗号分隔，便于事后追溯）'",
         }
 
         applied = []
