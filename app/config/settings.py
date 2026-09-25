@@ -90,6 +90,8 @@ class Settings(BaseSettings):
     QUERY_CACHE_MAX_SIZE: int = 200
     # 缓存后端：memory（进程内）/ redis（跨实例共享）/ auto（优先 Redis，失败降级内存）
     QUERY_CACHE_BACKEND: str = "auto"  # 坑⑮：多副本默认尝试 Redis，失败降级内存
+    # 降级到内存后每隔多少秒重试一次 Redis（0 = 永不重试，保持永久降级）
+    QUERY_CACHE_REDIS_RETRY_SECONDS: int = 30
     REDIS_URL: str = "redis://localhost:6379/0"
 
     # --- Rate Limiting ---

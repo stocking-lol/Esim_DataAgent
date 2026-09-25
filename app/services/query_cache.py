@@ -8,19 +8,25 @@
 设计要点：
 - 仅缓存「成功」的查询结果（blocked / error 不缓存）
 - 按 (question, role, mvno_id) 维度隔离，避免越权命中
-- **双后端**：MemoryCacheBackend（进程内 dict，LRU 近似）与
+- **双后端**：MemoryCacheBackend（进程内 OrderedDict，真 LRU 淘汰）与
   RedisCacheBackend（redis.asyncio + JSON 序列化，跨实例共享）
-- **降级策略（fail-soft）**：Redis 连接/执行异常时自动降级为内存缓存，
-  缓存故障不阻断主链路（与 RAG 检索失败降级的设计哲学一致）
+- **降级策略（fail-soft + 可恢复）**：Redis 连接/执行异常时自动降级为内存缓存，
+  缓存故障不阻断主链路；降级后按 QUERY_CACHE_REDIS_RETRY_SECONDS 冷却期重试
+  并 ping 探活，恢复后自动切回 Redis（早期实现只降不恢复，多副本下命中率被稀释）
 - 后端选择：settings.QUERY_CACHE_BACKEND = memory / redis / auto
   （auto = 优先 Redis，失败降级 memory）
 - TTL 默认 60s；QUERY_CACHE_ENABLED 可全局关闭
+
+命中语义：key 为 `role|mvno_id|question.strip().lower()` 的**精确匹配**
+（不含 conversation_id，不做语义相似）；value 为整个 QueryResult 的 JSON。
+提升命中率需要问题归一化 + 向量相似检索，见 docs/pitfalls.md 相关讨论。
 """
 
 import json
 import logging
 import time
 from abc import ABC, abstractmethod
+from collections import OrderedDict
 from dataclasses import asdict, dataclass
 from typing import Optional
 
@@ -57,11 +63,18 @@ class CacheBackend(ABC):
 
 
 class MemoryCacheBackend(CacheBackend):
-    """进程内 TTL 缓存（LRU 近似），单实例部署时的默认后端"""
+    """进程内 TTL 缓存（LRU 淘汰），单实例部署或 Redis 降级时的后端
+
+    淘汰策略：先回收过期项；仍超容量则按 **LRU 逐个淘汰**最久未访问的条目。
+
+    注意：早期实现在超容量时直接 ``clear()`` 全量清空，会造成周期性缓存雪崩
+    （所有缓存同时失效，请求瞬间全部回源打向下游），已改为逐个 LRU 淘汰，
+    使缓存容量平滑收敛而不是断崖式失效。
+    """
 
     def __init__(self, max_size: int = 200) -> None:
-        self._store: dict[str, _CacheEntry] = {}
-        self._max_size = max_size
+        self._store: "OrderedDict[str, _CacheEntry]" = OrderedDict()
+        self._max_size = max(1, max_size)
         self._hits = 0
         self._misses = 0
 
@@ -74,23 +87,26 @@ class MemoryCacheBackend(CacheBackend):
             self._store.pop(key, None)
             self._misses += 1
             return None
+        # 命中即刷新为最近使用（LRU 语义）
+        self._store.move_to_end(key)
         self._hits += 1
         logger.debug("Cache HIT (mem, key=%s)", key[:40])
         return entry.result
 
     async def put(self, key: str, result: object, ttl: int) -> None:
+        now = time.time()
+        # 1) 优先回收已过期条目（不占用 LRU 淘汰名额）
         if len(self._store) >= self._max_size:
-            now = time.time()
             expired = [k for k, v in self._store.items() if now > v.expires_at]
             for k in expired:
                 self._store.pop(k, None)
-            if len(self._store) >= self._max_size:
-                self._store.clear()
-        self._store[key] = _CacheEntry(
-            result=result,
-            expires_at=time.time() + ttl,
-        )
-        logger.debug("Cache PUT (mem, key=%s)", key[:40])
+        # 2) 写入并标记为最近使用
+        self._store[key] = _CacheEntry(result=result, expires_at=now + ttl)
+        self._store.move_to_end(key)
+        # 3) 仍超容量 → 逐个淘汰最久未访问者，而非整体清空
+        while len(self._store) > self._max_size:
+            evicted, _ = self._store.popitem(last=False)
+            logger.debug("Cache EVICT (mem, lru, key=%s)", evicted[:40])
 
     def clear(self) -> None:
         self._store.clear()
@@ -180,6 +196,9 @@ class QueryCache:
             settings.QUERY_CACHE_BACKEND)
         self._backend_name = type(self._backend).__name__
         self._degraded = False
+        self._degraded_at: float = 0.0
+        # 配置期望使用 Redis 时才做恢复尝试（纯 memory 模式无需重试）
+        self._redis_expected = settings.QUERY_CACHE_BACKEND in ("redis", "auto")
 
     def _build_backend(self, name: str) -> CacheBackend:
         if name in ("redis", "auto"):
@@ -190,9 +209,37 @@ class QueryCache:
                 logger.warning("Redis backend init failed (%s), using memory", e)
         return MemoryCacheBackend(max_size=self._max_size)
 
+    async def _maybe_recover(self) -> None:
+        """降级后按冷却期重试 Redis，恢复跨实例共享缓存。
+
+        早期实现一旦降级就永不恢复（``_degraded`` 只置位不重置），
+        Redis 短暂抖动会让该进程余生都走进程内缓存 —— 多副本下各 Pod 缓存
+        互不可见，命中率被稀释且失效不同步。现改为冷却期后重试并 ping 探活。
+        """
+        if not self._degraded or not self._redis_expected:
+            return
+        retry_after = settings.QUERY_CACHE_REDIS_RETRY_SECONDS
+        if retry_after <= 0:
+            return
+        if time.time() - self._degraded_at < retry_after:
+            return
+        # 冷却期已到：尝试重建并探活
+        try:
+            backend = RedisCacheBackend(settings.REDIS_URL)
+            await backend._client.ping()
+            self._backend = backend
+            self._backend_name = type(backend).__name__
+            self._degraded = False
+            logger.info("Cache backend recovered to Redis")
+        except Exception as e:
+            # 仍不可用：顺延下次重试时间，避免每个请求都去撞超时
+            self._degraded_at = time.time()
+            logger.debug("Cache backend still unavailable: %s", e)
+
     async def get(self, question: str, role: str, mvno_id: Optional[int]) -> Optional[object]:
         if not settings.QUERY_CACHE_ENABLED:
             return None
+        await self._maybe_recover()
         key = self._make_key(question, role, mvno_id)
         try:
             return await self._backend.get(key)
@@ -200,17 +247,20 @@ class QueryCache:
             await self._degrade(e, "get")
 
     async def _degrade(self, e: Exception, op: str) -> None:
-        """切换为内存后端（fail-soft）"""
+        """切换为内存后端（fail-soft），并记录降级时间用于后续恢复重试"""
         if not self._degraded:
             logger.warning(
                 "Cache backend %s failed on %s (%s), degrading to memory",
                 self._backend_name, op, e)
             self._backend = MemoryCacheBackend(max_size=self._max_size)
+            self._backend_name = type(self._backend).__name__
             self._degraded = True
+            self._degraded_at = time.time()
 
     async def put(self, question: str, role: str, mvno_id: Optional[int], result: object) -> None:
         if not settings.QUERY_CACHE_ENABLED:
             return
+        await self._maybe_recover()
         key = self._make_key(question, role, mvno_id)
         try:
             await self._backend.put(key, result, settings.QUERY_CACHE_TTL_SECONDS)
